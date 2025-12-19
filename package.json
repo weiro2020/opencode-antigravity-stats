@@ -1,0 +1,29 @@
+{
+  "name": "opencode-antigravity-stats",
+  "version": "1.0.0",
+  "description": "Statistics and monitoring plugin for OpenCode Antigravity accounts",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.0.167",
+    "chokidar": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

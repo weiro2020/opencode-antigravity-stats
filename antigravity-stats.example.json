@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "lastUpdated": "2024-01-01T00:00:00.000Z",
+  "quotaTracking": {
+    "user1@gmail.com": {
+      "windows": {
+        "claude": {
+          "windowStart": 1700000000000,
+          "tokensUsed": 150000,
+          "requestsCount": 45
+        }
+      },
+      "calibrations": {
+        "claude": {
+          "estimatedRequestLimit": 600,
+          "percentRemaining": 100,
+          "timestamp": 1700000000000,
+          "tokensAtCalibration": 0,
+          "requestsAtCalibration": 0,
+          "estimatedTokenLimit": 10000000
+        },
+        "gemini": {
+          "estimatedRequestLimit": 600,
+          "percentRemaining": 100,
+          "timestamp": 1700000000000,
+          "tokensAtCalibration": 0,
+          "requestsAtCalibration": 0,
+          "estimatedTokenLimit": 10000000
+        }
+      }
+    }
+  }
+}
