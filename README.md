@@ -87,3 +87,16 @@ Ensure the Antigravity plugin is active and you are using a model provided by it
 ---
 
 *Made with ❤️ by DevCatanzaro*
+
+---
+
+## ⚖️ Disclaimer
+
+**EDUCATIONAL USE ONLY**
+
+This software is a research project intended strictly for **educational and monitoring purposes**. It is designed to help users visualize and understand their own usage patterns of AI services.
+
+1.  **No Affiliation**: This project is **not** affiliated with, endorsed by, or connected to Google, Anthropic, OpenCode, or any other service provider mentioned.
+2.  **No Warranty**: The software is provided "as is", without warranty of any kind. The developers are not responsible for any account suspensions, bans, or data loss resulting from the use of this tool.
+3.  **Terms of Service**: Users are solely responsible for ensuring that their use of this software complies with the Terms of Service (ToS) of Google Cloud, Antigravity, and any other third-party APIs involved.
+4.  **Use at Your Own Risk**: By using this software, you acknowledge that you are doing so voluntarily and assume all risks associated with its use.
