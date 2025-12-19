@@ -66,7 +66,16 @@ If you only have one account configured in Antigravity, the plugin will simply s
 The plugin automatically detects all accounts listed in `antigravity-accounts.json`. It will display a summary section for each account in the title bar (separated by `|`).
 
 ### Manual Calibration (Optional)
-By default, the plugin assumes a safe limit of **600 requests per 5 hours**. If your account has a higher limit, you can edit `~/.config/opencode/antigravity-stats.json` manually (the plugin preserves your changes):
+By default, the plugin assumes a limit of **600 requests per 5 hours**.
+
+> **Note**: This value is an approximation observed for **Google AI Pro** accounts. For other account types, the exact limits have not yet been determined.
+
+You can modify these limits (or any other value) directly from OpenCode using any LLM agent or by editing the JSON file manually. The plugin watches the file and reflects changes **immediately** without requiring a restart.
+
+**Example Prompt to OpenCode:**
+> "Please set the request limit for the Gemini group to 1000 for all accounts."
+
+Or manually editing `~/.config/opencode/antigravity-stats.json`:
 
 ```json
 "calibrations": {
