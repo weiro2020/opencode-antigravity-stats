@@ -19,6 +19,69 @@ This plugin provides real-time visibility into quota usage for Antigravity (Goog
     > **Note**: This is handled by [opencode-google-antigravity-auth](https://github.com/shekohex/opencode-google-antigravity-auth) (or a compatible fork) which manages Google Cloud authentication tokens.
 3.  **Quota Script**: The `quota` command must be available to fetch server data. See [Auxiliary Scripts](#-auxiliary-scripts) section.
 
+## 🖥️ Remote Setup (Required)
+
+This plugin requires the **Antigravity Language Server (LS) to run on your Linux server/VPS**, not on your local machine. The LS is what provides quota data via the `quota` script.
+
+### Architecture
+
+```
+┌─────────────────────┐         SSH          ┌─────────────────────┐
+│  Windows/Local PC   │ ◄──────────────────► │    Linux VPS        │
+│                     │                      │                     │
+│  Antigravity App    │                      │  Language Server    │
+│  (Remote SSH mode)  │                      │  OpenCode + Plugin  │
+│                     │                      │  quota script       │
+└─────────────────────┘                      └─────────────────────┘
+```
+
+### Setup Steps
+
+1. **Connect Antigravity via SSH Remote**
+   
+   In Antigravity (Windows), use the Remote SSH extension to connect to your VPS. This spawns the Language Server on the VPS.
+
+2. **Login with your Google Account**
+   
+   Login to Antigravity with the **same Google account** used for OpenCode's Antigravity auth plugin. The LS will use this account's quota.
+
+3. **Verify the LS is running**
+   
+   On your VPS, run:
+   ```bash
+   ps aux | grep language_server_linux
+   ```
+   You should see the LS process running.
+
+4. **Test the quota script**
+   
+   ```bash
+   quota
+   ```
+   This should display your current quota. If it works, the plugin can fetch data.
+
+### Keeping the Language Server Running
+
+When you close Antigravity on Windows, it normally sends a shutdown signal to the LS on the VPS. To keep the LS running after closing Antigravity:
+
+**Instead of closing with the X button or Alt+F4:**
+1. Open **Task Manager** (Ctrl+Shift+Esc)
+2. Find the Antigravity process
+3. Click **End Task**
+
+This kills the client without sending the shutdown signal, so the LS keeps running on the VPS.
+
+| Close Method | LS on VPS |
+|--------------|-----------|
+| X button / Alt+F4 | Shuts down |
+| Task Manager → End Task | Keeps running |
+
+> **Why?** Keeping the LS running allows the `quota` script to fetch data even when Antigravity is closed. When you reopen Antigravity, it reconnects to the existing LS.
+
+### Preventing Auto-Shutdown
+
+The LS has a 3-hour inactivity timeout. Use the `antigravity-server-wrapper.sh` script (see [Auxiliary Scripts](#-auxiliary-scripts)) to disable this.
+
 ## ⚙️ How it Works
 
 The plugin intercepts completed assistant messages and:
