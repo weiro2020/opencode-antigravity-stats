@@ -1,5 +1,40 @@
 # OpenCode Antigravity Stats Plugin - Changelog
 
+## v1.2.2 - 2025-12-21: Mostrar Stats de Grupos Inactivos
+
+### Fixes
+
+**Requests y tokens ahora visibles para grupos inactivos:**
+- Antes: Solo el grupo activo mostraba `requestsCount` y `tokensUsed` en el título
+- Ahora: Todos los grupos (CL, PR, FL) muestran sus contadores acumulados
+- `rpm` sigue siendo exclusivo del grupo activo (se calcula en tiempo real)
+
+### Cambio Técnico
+
+En `src/collector.ts`, función `getQuotaStatsAllGroups()`:
+
+**Antes:**
+```typescript
+if (isActive && activeAccount) {
+  // Solo leía datos para el grupo activo
+}
+```
+
+**Después:**
+```typescript
+if (activeAccount) {
+  if (isActive) {
+    rpm = acctStats?.requestTimestamps.length || 0;
+  }
+  // Requests y tokens se leen para TODOS los grupos
+  const tracking = this.stats.quotaTracking?.[activeAccount];
+  const window = tracking?.windows?.[group];
+  // ...
+}
+```
+
+---
+
 ## v1.2.1 - 2025-12-21: Auxiliary Scripts
 
 ### New

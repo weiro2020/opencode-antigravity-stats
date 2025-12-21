@@ -782,15 +782,18 @@ export class StatsCollector {
       // Get server data (% and time)
       const serverData = this.getServerQuotaForGroup(group);
       
-      // Get local data (rpm, requests, tokens) - only for active group
+      // Get local data (rpm, requests, tokens)
       let rpm = 0;
       let requestsCount = 0;
       let tokensUsed = 0;
 
-      if (isActive && activeAccount) {
-        rpm = acctStats?.requestTimestamps.length || 0;
+      if (activeAccount) {
+        // RPM solo para el grupo activo
+        if (isActive) {
+          rpm = acctStats?.requestTimestamps.length || 0;
+        }
         
-        // Get from quota tracking for this account and group
+        // Requests y tokens para todos los grupos
         const tracking = this.stats.quotaTracking?.[activeAccount];
         const window = tracking?.windows?.[group];
         

@@ -226,7 +226,7 @@ Wrapper script that prevents the Antigravity server from auto-shutting down afte
 
 ## 🛠 Troubleshooting
 
-**"?" or "!" in title:**
+**\"?\" or \"!\" in title:**
 - `?` means no data available from server
 - `!` means using cached data (server unavailable)
 
@@ -237,6 +237,75 @@ Ensure the Antigravity plugin is active and you are using a tracked model.
 1. Check `reset_time` from server: `quota --json`
 2. Reset occurs when `windowStart < (reset_time - 5h)`
 3. Wait for next fetch (60 sec) or restart OpenCode
+
+---
+
+## 🏗️ Code Architecture
+
+Quick reference for modifying the plugin without reading all the code.
+
+### File Structure
+
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Plugin entry point, event hooks, session title formatting |
+| `src/collector.ts` | Main logic: tracking, quota fetching, stats accumulation |
+| `src/storage.ts` | Disk persistence (load/save stats and quota cache) |
+| `src/watcher.ts` | Watches `antigravity-accounts.json` for rate limit changes |
+| `src/types.ts` | TypeScript interfaces and constants |
+| `src/format.ts` | Formatting for `/stats` command output |
+
+### Key Functions in `collector.ts`
+
+| Function | Line ~  | Purpose |
+|----------|---------|---------|
+| `getModelGroup()` | 56 | Maps `providerID/modelID` → `claude\|pro\|flash\|other` |
+| `recordMessage()` | 168 | Called on each assistant message, updates tokens/requests |
+| `fetchServerQuota()` | 610 | Executes `quota --json`, updates `serverQuotaCache` |
+| `getQuotaStatsAllGroups()` | 737 | Returns stats for all 3 groups (used for session title) |
+| `getServerQuotaForGroup()` | 680 | Gets server % and time for a specific group |
+
+### Session Title Logic (`index.ts`)
+
+The title is built in `updateSessionTitle()` (~line 42):
+
+```typescript
+const parts = allGroups.map((g) => {
+  if (g.isActive) {
+    // Active: rpm/requests, %, time, tokens
+    return `${g.label}:${g.rpm}/${g.requestsCount},${pct},${g.timeUntilReset},${formatTokens(g.tokensUsed)}`;
+  } else {
+    // Inactive: requests, %, time (NO rpm, NO tokens)
+    return `${g.label}:${g.requestsCount},${pct},${g.timeUntilReset}`;
+  }
+});
+```
+
+### Data Flow
+
+```
+Message received
+      ↓
+recordMessage() → updates quotaTracking.windows[group]
+      ↓
+scheduleSave() → debounced write to disk
+      ↓
+Every 60s: fetchServerQuota() → updates serverQuotaCache
+      ↓
+updateSessionTitle() → calls getQuotaStatsAllGroups()
+      ↓
+Session title updated with combined local + server data
+```
+
+### Common Modifications
+
+| Want to... | Modify... |
+|------------|-----------|
+| Change title format | `updateSessionTitle()` in `index.ts` |
+| Add new model group | `getModelGroup()` in `collector.ts` |
+| Change what data shows for inactive groups | `getQuotaStatsAllGroups()` in `collector.ts` |
+| Modify reset logic | Look for `shouldReset` in `getQuotaStatsAllGroups()` |
+| Change fetch interval | `startQuotaFetching()` in `collector.ts` (default 60000ms) |
 
 ---
 
