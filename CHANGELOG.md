@@ -1,5 +1,20 @@
 # OpenCode Antigravity Stats Plugin - Changelog
 
+## v1.2.1 - 2025-12-21: Auxiliary Scripts
+
+### New
+
+**Added scripts/ directory with standalone utilities:**
+- `quota` - Bash wrapper for quota fetcher
+- `get_antigravity_quota.py` - Python script to fetch quota from Language Server via Connect RPC
+- `antigravity-server-wrapper.sh` - Prevents server auto-shutdown after 3 hours
+
+### Docs
+
+- Updated README with installation instructions for auxiliary scripts
+
+---
+
 ## v1.2.0 - 2025-12-21: Server-Driven Quota & Simplified Architecture
 
 ### Breaking Changes
