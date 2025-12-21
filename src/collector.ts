@@ -3,6 +3,8 @@
  * Accumulates statistics from events and watcher
  */
 
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import type {
   StatsData,
   MessageData,
@@ -12,6 +14,8 @@ import type {
   ModelGroup,
   QuotaWindow,
   AccountQuotaTracking,
+  ServerQuotaCache,
+  ServerQuotaGroup,
 } from "./types.js";
 import {
   loadStats,
@@ -22,9 +26,18 @@ import {
   addErrorEntry,
   resetSession,
   createEmptyStats,
+  loadServerQuotaCache,
+  saveServerQuotaCache,
 } from "./storage.js";
 import { AccountsWatcher } from "./watcher.js";
 import { FIVE_HOURS_MS } from "./types.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const execAsync = promisify(exec);
+
+// Path to the quota command (absolute path since it may not be in PATH)
+const QUOTA_COMMAND = join(homedir(), ".antigravity-standalone", "quota");
 
 export type ToastCallback = (
   title: string,
@@ -36,7 +49,8 @@ export type ToastCallback = (
  * Determines the model group for quota tracking
  * Solo trackea modelos de Antigravity (provider google)
  * - claude: modelos Claude
- * - gemini: modelos Gemini
+ * - pro: modelos Gemini Pro
+ * - flash: modelos Gemini Flash
  * - other: cualquier otro (no se trackea quota)
  */
 export function getModelGroup(providerID: string, modelID: string): ModelGroup {
@@ -45,7 +59,9 @@ export function getModelGroup(providerID: string, modelID: string): ModelGroup {
   
   const lower = modelID.toLowerCase();
   if (lower.includes("claude")) return "claude";
-  if (lower.includes("gemini")) return "gemini";
+  if (lower.includes("gemini") && lower.includes("flash")) return "flash";
+  if (lower.includes("gemini") && lower.includes("pro")) return "pro";
+  if (lower.includes("gemini")) return "pro"; // Default gemini → pro
   return "other";
 }
 
@@ -78,6 +94,11 @@ export class StatsCollector {
   private saveDebounceTimer: NodeJS.Timeout | null = null;
   private requestTimestamps: number[] = [];
   private accountStats: Map<string, AccountSessionStats> = new Map();
+  
+  // Server quota cache (from quota command)
+  private serverQuotaCache: ServerQuotaCache | null = null;
+  private quotaFetchInterval: NodeJS.Timeout | null = null;
+  private quotaFetchStarted: boolean = false;
 
   constructor() {
     this.stats = createEmptyStats();
@@ -92,6 +113,13 @@ export class StatsCollector {
 
     // Load existing stats
     this.stats = await loadStats();
+    
+    // Load server quota cache from disk (fallback if fetch fails)
+    this.serverQuotaCache = await loadServerQuotaCache();
+    
+    // Fetch fresh quota data from server immediately
+    // This ensures we have current data when the first message arrives
+    await this.fetchServerQuota();
 
     // Inicializar accountStats desde quotaTracking guardado en disco
     // Esto preserva los contadores entre reinicios de OpenCode
@@ -122,11 +150,22 @@ export class StatsCollector {
    * Stops the collector
    */
   async stop(): Promise<void> {
+    // Stop quota fetching interval
+    if (this.quotaFetchInterval) {
+      clearInterval(this.quotaFetchInterval);
+      this.quotaFetchInterval = null;
+    }
+    
     if (this.saveDebounceTimer) {
       clearTimeout(this.saveDebounceTimer);
     }
     await this.watcher.stop();
     await saveStats(this.stats);
+    
+    // Save quota cache to disk
+    if (this.serverQuotaCache) {
+      await saveServerQuotaCache(this.serverQuotaCache);
+    }
   }
 
   /**
@@ -181,7 +220,10 @@ export class StatsCollector {
     // El grupo "other" no cuenta tokens ni afecta la quota
     if (modelGroup !== "other") {
       // Update daily account stats (use active account)
-      const activeAccount = await this.watcher.getActiveAccount();
+      // Priority: 1) Server quota cache email, 2) Local accounts file
+      const serverEmail = this.serverQuotaCache?.email;
+      const localAccount = await this.watcher.getActiveAccount();
+      const activeAccount = serverEmail || localAccount;
       if (activeAccount) {
         if (!daily.byAccount[activeAccount]) {
           daily.byAccount[activeAccount] = { requests: 0, rateLimits: 0 };
@@ -336,9 +378,6 @@ export class StatsCollector {
     }> = [];
 
     const now = Date.now();
-    
-    // Read disk stats to get externally set calibration and windowStart
-    const diskStats = await loadStats();
 
     for (const account of accounts) {
       const prefix = account.email.split("@")[0].substring(0, 2).toUpperCase();
@@ -347,46 +386,23 @@ export class StatsCollector {
 
       // Get quota tracking for this account
       const tracking = this.stats.quotaTracking?.[account.email];
-      const diskTracking = diskStats.quotaTracking?.[account.email];
       const window = tracking?.windows[activeGroup];
-      const diskWindow = diskTracking?.windows?.[activeGroup];
 
       let tokensUsed = 0;
       let requestsCount = 0;
       let timeUntilReset = "?";
-      let percentRemaining: number | null = null;
+      // El % viene del servidor, no se calcula localmente
+      const percentRemaining: number | null = null;
 
       if (window) {
-        // Use disk windowStart if it's older (externally set)
-        let windowStart = window.windowStart;
-        if (diskWindow && diskWindow.windowStart < windowStart) {
-          windowStart = diskWindow.windowStart;
-        }
-        
-        // Check if window is still valid (less than 5 hours old)
-        const windowAge = now - windowStart;
+        const windowAge = now - window.windowStart;
         if (windowAge < FIVE_HOURS_MS) {
           tokensUsed = window.tokensUsed;
           requestsCount = window.requestsCount;
           const remaining = FIVE_HOURS_MS - windowAge;
           timeUntilReset = formatTimeRemaining(remaining);
-
-          // Use disk calibration if available (externally set)
-          // Priority: calibrations[group] > calibration (legacy)
-          const calibration = 
-            diskTracking?.calibrations?.[activeGroup] || 
-            tracking?.calibrations?.[activeGroup] ||
-            diskTracking?.calibration || 
-            tracking?.calibration;
-          
-          // Calculate estimated % if calibrated
-          if (calibration) {
-            const requestRatio = requestsCount / calibration.estimatedRequestLimit;
-            const usedPercent = requestRatio * 100;
-            percentRemaining = Math.max(0, Math.min(100, 100 - usedPercent));
-          }
         } else {
-          // Window expired, reset
+          // Window expired
           timeUntilReset = "5h0m";
         }
       } else {
@@ -407,143 +423,6 @@ export class StatsCollector {
     }
 
     return result;
-  }
-
-  /**
-   * Calibrates quota estimation for an account
-   * Call this when user provides current % from AntigravityQuota extension
-   * @param email Account email
-   * @param percentRemaining Current % remaining
-   * @param modelGroup Model group to calibrate (claude or gemini)
-   */
-  calibrateQuota(email: string, percentRemaining: number, modelGroup: ModelGroup = "claude"): void {
-    if (modelGroup === "other") {
-      console.error("[antigravity-stats] Cannot calibrate 'other' group");
-      return;
-    }
-
-    if (!this.stats.quotaTracking?.[email]) {
-      console.error("[antigravity-stats] No tracking data for account:", email);
-      return;
-    }
-
-    const tracking = this.stats.quotaTracking[email];
-    const window = tracking.windows[modelGroup];
-
-    if (!window) {
-      console.error("[antigravity-stats] No window data for calibration");
-      return;
-    }
-
-    const percentUsed = 100 - percentRemaining;
-    if (percentUsed <= 0) {
-      console.error("[antigravity-stats] Cannot calibrate with 100% remaining");
-      return;
-    }
-
-    // Calcular límites estimados
-    // Si usamos X tokens y Y requests, y eso representa Z% del total:
-    // límite_tokens = X / (Z/100)
-    // límite_requests = Y / (Z/100)
-    const estimatedTokenLimit = Math.round(window.tokensUsed / (percentUsed / 100));
-    const estimatedRequestLimit = Math.round(window.requestsCount / (percentUsed / 100));
-
-    // Guardar en calibrations[group]
-    if (!tracking.calibrations) {
-      tracking.calibrations = {};
-    }
-    tracking.calibrations[modelGroup] = {
-      tokensAtCalibration: window.tokensUsed,
-      requestsAtCalibration: window.requestsCount,
-      percentRemaining,
-      timestamp: Date.now(),
-      estimatedTokenLimit,
-      estimatedRequestLimit,
-    };
-
-    console.log(`[antigravity-stats] Calibrated quota for ${email} (${modelGroup})`);
-    console.log("  Tokens at calibration:", window.tokensUsed);
-    console.log("  Requests at calibration:", window.requestsCount);
-    console.log("  Percent remaining:", percentRemaining);
-    console.log("  Estimated token limit:", estimatedTokenLimit);
-    console.log("  Estimated request limit:", estimatedRequestLimit);
-
-    this.scheduleSave();
-  }
-
-  /**
-   * Calibrates quota with manual limits (when auto-calculation isn't possible)
-   * Use this when the user has low usage but knows the actual limits
-   * @param email Account email
-   * @param percentRemaining Current % remaining from AntigravityQuota
-   * @param estimatedTokenLimit Manual estimate of total token limit
-   * @param estimatedRequestLimit Manual estimate of total request limit  
-   * @param windowAgeMinutes How old is the current window (in minutes)
-   * @param modelGroup Model group to calibrate (claude or gemini)
-   */
-  calibrateQuotaManual(
-    email: string,
-    percentRemaining: number,
-    estimatedTokenLimit: number,
-    estimatedRequestLimit: number,
-    windowAgeMinutes?: number,
-    modelGroup: ModelGroup = "claude"
-  ): void {
-    if (modelGroup === "other") {
-      console.error("[antigravity-stats] Cannot calibrate 'other' group");
-      return;
-    }
-
-    // Ensure quota tracking exists for this account
-    if (!this.stats.quotaTracking) {
-      this.stats.quotaTracking = {};
-    }
-    if (!this.stats.quotaTracking[email]) {
-      this.stats.quotaTracking[email] = { windows: {} };
-    }
-
-    const tracking = this.stats.quotaTracking[email];
-
-    // If windowAgeMinutes provided, adjust the window start time
-    if (windowAgeMinutes !== undefined && windowAgeMinutes > 0) {
-      const windowStart = Date.now() - (windowAgeMinutes * 60 * 1000);
-      if (!tracking.windows[modelGroup]) {
-        tracking.windows[modelGroup] = {
-          windowStart,
-          tokensUsed: 0,
-          requestsCount: 0,
-        };
-      } else {
-        tracking.windows[modelGroup]!.windowStart = windowStart;
-      }
-    }
-
-    const window = tracking.windows[modelGroup];
-    const tokensUsed = window?.tokensUsed || 0;
-    const requestsCount = window?.requestsCount || 0;
-
-    // Guardar en calibrations[group]
-    if (!tracking.calibrations) {
-      tracking.calibrations = {};
-    }
-    tracking.calibrations[modelGroup] = {
-      tokensAtCalibration: tokensUsed,
-      requestsAtCalibration: requestsCount,
-      percentRemaining,
-      timestamp: Date.now(),
-      estimatedTokenLimit,
-      estimatedRequestLimit,
-    };
-
-    console.log(`[antigravity-stats] Manual calibration for ${email} (${modelGroup})`);
-    console.log("  Percent remaining:", percentRemaining);
-    console.log("  Estimated token limit:", estimatedTokenLimit);
-    console.log("  Estimated request limit:", estimatedRequestLimit);
-    if (windowAgeMinutes) {
-      console.log("  Window age:", windowAgeMinutes, "minutes");
-    }
-
-    this.scheduleSave();
   }
 
   /**
@@ -696,6 +575,289 @@ export class StatsCollector {
     this.saveDebounceTimer = setTimeout(async () => {
       await saveStats(this.stats);
     }, 1000);
+  }
+
+  // ============================================
+  // Server Quota Fetching (from quota command)
+  // ============================================
+
+  /**
+   * Starts the quota fetching process
+   * Called on first message, sets up interval for every 60 seconds
+   * Note: First fetch is done in initialize() to ensure data is ready
+   */
+  startQuotaFetching(): void {
+    if (this.quotaFetchStarted) return;
+    this.quotaFetchStarted = true;
+
+    // Set up interval for every 60 seconds
+    // First fetch was already done in initialize()
+    this.quotaFetchInterval = setInterval(() => {
+      this.fetchServerQuota();
+    }, 60000);
+  }
+
+  /**
+   * Fetches quota from the server using the quota command
+   * Updates serverQuotaCache and persists to disk on success
+   */
+  async fetchServerQuota(): Promise<void> {
+    try {
+      const result = await execAsync(`${QUOTA_COMMAND} --json`, { timeout: 15000 });
+      const data = JSON.parse(result.stdout);
+
+      this.serverQuotaCache = {
+        timestamp: Date.now(),
+        email: data.email || "",
+        groups: (data.groups || []).map((g: any) => ({
+          name: g.name,
+          remaining_percent: g.remaining_percent,
+          reset_time: g.reset_time,
+          time_until_reset: g.time_until_reset,
+        })),
+        isFromCache: data.is_cached || false,
+      };
+
+      // Verificar si hay que resetear contadores locales para cada grupo
+      // Esto se ejecuta cada 60 segundos para todos los grupos de la cuenta activa
+      const activeEmail = data.email;
+      if (activeEmail && this.stats.quotaTracking?.[activeEmail]) {
+        const accountTracking = this.stats.quotaTracking[activeEmail];
+        
+        // Mapeo de nombres de grupo del servidor a ModelGroup local
+        const serverGroupMap: Record<string, ModelGroup> = {
+          "Claude": "claude",
+          "Gemini 3 Pro": "pro",
+          "Gemini 3 Flash": "flash",
+        };
+        
+        for (const serverGroup of (data.groups || [])) {
+          const modelGroup = serverGroupMap[serverGroup.name];
+          if (!modelGroup) continue;
+          
+          const window = accountTracking.windows?.[modelGroup];
+          if (!window) continue;
+          
+          const serverResetTime = serverGroup.reset_time 
+            ? new Date(serverGroup.reset_time).getTime() 
+            : null;
+          
+          if (serverResetTime) {
+            const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
+            if (window.windowStart < serverCycleStart) {
+              // El servidor empezó un nuevo ciclo - resetear contadores locales
+              window.windowStart = serverCycleStart;
+              window.requestsCount = 0;
+              window.tokensUsed = 0;
+            }
+          }
+        }
+        
+        // Guardar cambios si hubo resets
+        this.scheduleSave();
+      }
+
+      // Persist to disk on successful fetch
+      await saveServerQuotaCache(this.serverQuotaCache);
+
+    } catch (error) {
+      console.error("[antigravity-stats] Error fetching quota:", error);
+      // Keep existing cache if available, mark as from cache
+      if (this.serverQuotaCache) {
+        this.serverQuotaCache.isFromCache = true;
+      }
+    }
+  }
+
+  /**
+   * Gets server quota data for a specific model group
+   * Maps server group names to ModelGroup values
+   * Calculates timeUntilReset dynamically from reset_time
+   */
+  getServerQuotaForGroup(group: ModelGroup): {
+    percent: number | null;
+    timeUntilReset: string;
+    resetTime: string | null;
+    isFromCache: boolean;
+  } | null {
+    if (!this.serverQuotaCache || !this.serverQuotaCache.groups || group === "other") return null;
+
+    // Map server group names to our ModelGroup values
+    const groupNameMap: Record<string, ModelGroup> = {
+      "Claude": "claude",
+      "Gemini 3 Pro": "pro",
+      "Gemini 3 Flash": "flash",
+    };
+
+    const serverGroup = this.serverQuotaCache.groups.find(
+      (g) => groupNameMap[g.name] === group
+    );
+
+    if (!serverGroup) return null;
+
+    // Calculate time until reset dynamically from reset_time
+    const timeUntilReset = this.calculateTimeUntilReset(serverGroup.reset_time);
+
+    return {
+      percent: serverGroup.remaining_percent,
+      timeUntilReset,
+      resetTime: serverGroup.reset_time,
+      isFromCache: this.serverQuotaCache.isFromCache ?? false,
+    };
+  }
+
+  /**
+   * Calculates time remaining until reset from ISO timestamp
+   */
+  private calculateTimeUntilReset(resetTimeStr: string): string {
+    if (!resetTimeStr) return "?";
+    
+    try {
+      const resetTime = new Date(resetTimeStr);
+      const now = new Date();
+      const diffMs = resetTime.getTime() - now.getTime();
+      
+      if (diffMs <= 0) return "0m";
+      
+      const hours = Math.floor(diffMs / (60 * 60 * 1000));
+      const minutes = Math.floor((diffMs % (60 * 60 * 1000)) / (60 * 1000));
+      
+      if (hours > 0) return `${hours}h${minutes}m`;
+      return `${minutes}m`;
+    } catch {
+      return "?";
+    }
+  }
+
+  /**
+   * Gets quota stats for all 3 groups, combining server data with local tracking
+   * Returns groups ordered with active group first, then CL, PR, FL
+   * @param activeGroup - The currently active model group
+   */
+  async getQuotaStatsAllGroups(activeGroup: ModelGroup): Promise<
+    Array<{
+      group: ModelGroup;
+      label: string;        // "CL", "PR", "FL"
+      rpm: number;
+      requestsCount: number;
+      tokensUsed: number;
+      percentRemaining: number | null;
+      timeUntilReset: string;
+      isFromCache: boolean;
+      isActive: boolean;
+    }>
+  > {
+    this.cleanTimestamps();
+    
+    const groups: ModelGroup[] = ["claude", "pro", "flash"];
+    const groupLabels: Record<ModelGroup, string> = {
+      claude: "CL",
+      pro: "PR",
+      flash: "FL",
+      other: "?",
+    };
+
+    const result: Array<{
+      group: ModelGroup;
+      label: string;
+      rpm: number;
+      requestsCount: number;
+      tokensUsed: number;
+      percentRemaining: number | null;
+      timeUntilReset: string;
+      isFromCache: boolean;
+      isActive: boolean;
+    }> = [];
+
+    // Get active account for local stats
+    // Priority: 1) Server quota cache email, 2) Local accounts file
+    const serverEmail = this.serverQuotaCache?.email;
+    const localAccount = await this.watcher.getActiveAccount();
+    const activeAccount = serverEmail || localAccount;
+    const acctStats = activeAccount ? this.accountStats.get(activeAccount) : null;
+
+    for (const group of groups) {
+      const isActive = group === activeGroup;
+      
+      // Get server data (% and time)
+      const serverData = this.getServerQuotaForGroup(group);
+      
+      // Get local data (rpm, requests, tokens) - only for active group
+      let rpm = 0;
+      let requestsCount = 0;
+      let tokensUsed = 0;
+
+      if (isActive && activeAccount) {
+        rpm = acctStats?.requestTimestamps.length || 0;
+        
+        // Get from quota tracking for this account and group
+        const tracking = this.stats.quotaTracking?.[activeAccount];
+        const window = tracking?.windows?.[group];
+        
+        if (window) {
+          // Check if server quota was reset (100% remaining or reset_time is in the future 
+          // and our windowStart is before the previous reset cycle)
+          const serverResetTime = serverData?.resetTime ? new Date(serverData.resetTime).getTime() : null;
+          const serverPercent = serverData?.percent;
+          
+          // If server shows 100% and we have requests, the server reset - clear our counters
+          // Or if our window started before the server's current cycle began (reset_time - 5h)
+          let shouldReset = false;
+          
+          // Comentado: Esta logica causa resets prematuros cuando el uso es bajo o hay mucho cache
+          // y el servidor sigue reportando 100%. Confiamos mas en el timestamp.
+          /*
+          if (serverPercent !== null && serverPercent !== undefined && serverPercent >= 99.9 && window.requestsCount > 0) {
+            // Server shows 100%, but we have requests - server must have reset
+            shouldReset = true;
+          } else 
+          */
+          if (serverResetTime) {
+            // Calculate when the current server cycle started (reset_time - 5h)
+            const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
+            if (window.windowStart < serverCycleStart) {
+              // Our window started before the current server cycle - reset
+              shouldReset = true;
+            }
+          }
+          
+          if (shouldReset && serverResetTime) {
+            // Reset the local window to match server's new cycle
+            const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
+            window.windowStart = serverCycleStart;
+            window.requestsCount = 0;
+            window.tokensUsed = 0;
+            this.scheduleSave();
+          }
+          
+          requestsCount = window.requestsCount;
+          tokensUsed = window.tokensUsed;
+        }
+      }
+
+      result.push({
+        group,
+        label: groupLabels[group],
+        rpm,
+        requestsCount,
+        tokensUsed,
+        percentRemaining: serverData?.percent ?? null,
+        timeUntilReset: serverData?.timeUntilReset || "?",
+        isFromCache: serverData?.isFromCache ?? true,
+        isActive,
+      });
+    }
+
+    // Sort: active group first, then maintain CL, PR, FL order
+    result.sort((a, b) => {
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      // For non-active, maintain original order (CL, PR, FL)
+      const order: Record<ModelGroup, number> = { claude: 0, pro: 1, flash: 2, other: 3 };
+      return order[a.group] - order[b.group];
+    });
+
+    return result;
   }
 
   /**

@@ -2,18 +2,18 @@
  * Storage manager for Antigravity Stats
  * Handles reading/writing to antigravity-stats.json
  */
-import type { StatsData, ModelStats, DailyStats, RateLimitEntry, ErrorEntry, AntigravityAccountsData } from "./types.js";
+import type { StatsData, ModelStats, DailyStats, RateLimitEntry, ErrorEntry, AntigravityAccountsData, ServerQuotaCache } from "./types.js";
 /**
  * Creates an empty stats structure
  */
 export declare function createEmptyStats(sessionId?: string): StatsData;
 /**
  * Loads stats from disk
- * Includes migration of legacy calibration → calibrations[claude]
  */
 export declare function loadStats(): Promise<StatsData>;
 /**
- * Saves stats to disk, preserving calibration and windowStart from disk
+ * Saves stats to disk
+ * La memoria es la fuente de verdad - simplemente guardamos lo que hay en memoria
  */
 export declare function saveStats(stats: StatsData): Promise<void>;
 /**
@@ -52,4 +52,18 @@ export declare function getAccountsFilePath(): string;
  * Gets the path to the stats file
  */
 export declare function getStatsFilePath(): string;
+/**
+ * Gets the path to the quota cache file
+ */
+export declare function getQuotaCacheFilePath(): string;
+/**
+ * Loads server quota cache from disk
+ * Handles both Python script format (models) and plugin format (groups)
+ */
+export declare function loadServerQuotaCache(): Promise<ServerQuotaCache | null>;
+/**
+ * Saves server quota cache to disk
+ * Writes in format compatible with Python script (quota_cache.json)
+ */
+export declare function saveServerQuotaCache(cache: ServerQuotaCache): Promise<void>;
 //# sourceMappingURL=storage.d.ts.map

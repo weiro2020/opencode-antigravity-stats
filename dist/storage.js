@@ -6,10 +6,11 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { FIVE_HOURS_MS } from "./types.js";
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const STATS_FILE = join(CONFIG_DIR, "antigravity-stats.json");
 const ACCOUNTS_FILE = join(CONFIG_DIR, "antigravity-accounts.json");
+// Use the same cache file as the Python quota script for compatibility
+const QUOTA_CACHE_FILE = join(homedir(), ".antigravity-standalone", "quota_cache.json");
 /**
  * Creates an empty stats structure
  */
@@ -44,7 +45,6 @@ export function createEmptyStats(sessionId) {
 }
 /**
  * Loads stats from disk
- * Includes migration of legacy calibration → calibrations[claude]
  */
 export async function loadStats() {
     try {
@@ -53,41 +53,12 @@ export async function loadStats() {
         }
         const content = await readFile(STATS_FILE, "utf-8");
         const data = JSON.parse(content);
-        // Migrate legacy calibration → calibrations.claude
+        // Limpiar campos legacy de calibration si existen
         if (data.quotaTracking) {
             for (const [email, tracking] of Object.entries(data.quotaTracking)) {
-                // If has old calibration but no calibrations object
-                if (tracking.calibration && !tracking.calibrations) {
-                    tracking.calibrations = {
-                        claude: tracking.calibration,
-                    };
-                }
-                // If calibrations doesn't have both claude and gemini defaults, create them
-                if (!tracking.calibrations) {
-                    tracking.calibrations = {};
-                }
-                // Ensure default calibration for claude if missing (600 requests limit)
-                if (!tracking.calibrations.claude) {
-                    tracking.calibrations.claude = {
-                        tokensAtCalibration: 0,
-                        requestsAtCalibration: 0,
-                        percentRemaining: 100,
-                        timestamp: Date.now(),
-                        estimatedTokenLimit: 10000000, // 10M tokens estimate
-                        estimatedRequestLimit: 600, // 600 requests per 5h window
-                    };
-                }
-                // Ensure default calibration for gemini if missing (600 requests limit)
-                if (!tracking.calibrations.gemini) {
-                    tracking.calibrations.gemini = {
-                        tokensAtCalibration: 0,
-                        requestsAtCalibration: 0,
-                        percentRemaining: 100,
-                        timestamp: Date.now(),
-                        estimatedTokenLimit: 10000000, // 10M tokens estimate
-                        estimatedRequestLimit: 600, // 600 requests per 5h window
-                    };
-                }
+                // Eliminar campos de calibration obsoletos
+                delete tracking.calibration;
+                delete tracking.calibrations;
             }
         }
         return data;
@@ -98,7 +69,8 @@ export async function loadStats() {
     }
 }
 /**
- * Saves stats to disk, preserving calibration and windowStart from disk
+ * Saves stats to disk
+ * La memoria es la fuente de verdad - simplemente guardamos lo que hay en memoria
  */
 export async function saveStats(stats) {
     try {
@@ -110,83 +82,6 @@ export async function saveStats(stats) {
         stats.lastUpdated = new Date().toISOString();
         // Cleanup old data before saving
         cleanupOldData(stats);
-        // Preserve calibrations and windowStart from disk that may have been set externally
-        // This allows external tools to calibrate quota and set window times
-        if (existsSync(STATS_FILE)) {
-            try {
-                const diskContent = await readFile(STATS_FILE, "utf-8");
-                const diskStats = JSON.parse(diskContent);
-                if (diskStats.quotaTracking) {
-                    for (const [email, diskTracking] of Object.entries(diskStats.quotaTracking)) {
-                        // If we have this account in memory
-                        if (stats.quotaTracking?.[email]) {
-                            // Always preserve disk calibrations (allows external manual changes)
-                            // Priority: calibrations (new) > calibration (legacy)
-                            if (diskTracking.calibrations) {
-                                if (!stats.quotaTracking[email].calibrations) {
-                                    stats.quotaTracking[email].calibrations = {};
-                                }
-                                // Merge calibrations from disk
-                                for (const [group, cal] of Object.entries(diskTracking.calibrations)) {
-                                    if (cal) {
-                                        stats.quotaTracking[email].calibrations[group] = cal;
-                                    }
-                                }
-                            }
-                            // Legacy: preserve old calibration field if exists
-                            if (diskTracking.calibration && !stats.quotaTracking[email].calibration) {
-                                stats.quotaTracking[email].calibration = diskTracking.calibration;
-                            }
-                            // Preserve disk windowStart if it's been manually adjusted (older than memory)
-                            // BUT only if the disk window is still valid (less than 5 hours old)
-                            // Also preserve tokensUsed and requestsCount if disk has higher values
-                            if (diskTracking.windows) {
-                                const now = Date.now();
-                                for (const [group, diskWindow] of Object.entries(diskTracking.windows)) {
-                                    const memWindow = stats.quotaTracking[email].windows?.[group];
-                                    if (diskWindow && memWindow) {
-                                        const diskWindowAge = now - diskWindow.windowStart;
-                                        // Only use disk values if the disk window is still valid (< 5 hours)
-                                        if (diskWindowAge < FIVE_HOURS_MS) {
-                                            // Use disk windowStart if older than memory
-                                            if (diskWindow.windowStart < memWindow.windowStart) {
-                                                memWindow.windowStart = diskWindow.windowStart;
-                                            }
-                                            // Use disk values if higher (externally set)
-                                            if (diskWindow.tokensUsed > memWindow.tokensUsed) {
-                                                memWindow.tokensUsed = diskWindow.tokensUsed;
-                                            }
-                                            if (diskWindow.requestsCount > memWindow.requestsCount) {
-                                                memWindow.requestsCount = diskWindow.requestsCount;
-                                            }
-                                        }
-                                    }
-                                    else if (diskWindow && !memWindow) {
-                                        // Disk has window but memory doesn't - preserve it if valid
-                                        const diskWindowAge = now - diskWindow.windowStart;
-                                        if (diskWindowAge < FIVE_HOURS_MS) {
-                                            if (!stats.quotaTracking[email].windows) {
-                                                stats.quotaTracking[email].windows = {};
-                                            }
-                                            stats.quotaTracking[email].windows[group] = diskWindow;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        else {
-                            // Account exists on disk but not in memory, preserve it
-                            if (!stats.quotaTracking)
-                                stats.quotaTracking = {};
-                            stats.quotaTracking[email] = diskTracking;
-                        }
-                    }
-                }
-            }
-            catch (err) {
-                // Ignore read errors, just save what we have
-            }
-        }
         await writeFile(STATS_FILE, JSON.stringify(stats, null, 2), "utf-8");
     }
     catch (error) {
@@ -332,5 +227,113 @@ export function getAccountsFilePath() {
  */
 export function getStatsFilePath() {
     return STATS_FILE;
+}
+/**
+ * Gets the path to the quota cache file
+ */
+export function getQuotaCacheFilePath() {
+    return QUOTA_CACHE_FILE;
+}
+/**
+ * Converts models array to groups array
+ * Groups models by: Claude, Gemini 3 Pro, Gemini 3 Flash
+ */
+function modelsToGroups(models) {
+    const groupsMap = {
+        'Claude': { models: [], pct: null, reset: null },
+        'Gemini 3 Pro': { models: [], pct: null, reset: null },
+        'Gemini 3 Flash': { models: [], pct: null, reset: null },
+    };
+    for (const m of models) {
+        const labelLower = m.label.toLowerCase();
+        let groupName = null;
+        if (labelLower.includes('claude') || labelLower.includes('gpt-oss') || labelLower.includes('gpt oss')) {
+            groupName = 'Claude';
+        }
+        else if (labelLower.includes('gemini') && labelLower.includes('flash')) {
+            groupName = 'Gemini 3 Flash';
+        }
+        else if (labelLower.includes('gemini') && labelLower.includes('pro')) {
+            groupName = 'Gemini 3 Pro';
+        }
+        else if (labelLower.includes('gemini')) {
+            groupName = 'Gemini 3 Pro'; // Default gemini to Pro
+        }
+        if (groupName && groupsMap[groupName]) {
+            groupsMap[groupName].models.push(m.label);
+            if (groupsMap[groupName].pct === null) {
+                groupsMap[groupName].pct = m.remaining_percent;
+                groupsMap[groupName].reset = m.reset_time;
+            }
+        }
+    }
+    const result = [];
+    for (const name of ['Claude', 'Gemini 3 Pro', 'Gemini 3 Flash']) {
+        const g = groupsMap[name];
+        if (g.models.length > 0 && g.pct !== null) {
+            result.push({
+                name,
+                remaining_percent: g.pct,
+                reset_time: g.reset || '',
+                time_until_reset: '', // Will be calculated dynamically
+            });
+        }
+    }
+    return result;
+}
+/**
+ * Loads server quota cache from disk
+ * Handles both Python script format (models) and plugin format (groups)
+ */
+export async function loadServerQuotaCache() {
+    try {
+        if (!existsSync(QUOTA_CACHE_FILE)) {
+            return null;
+        }
+        const content = await readFile(QUOTA_CACHE_FILE, "utf-8");
+        const data = JSON.parse(content);
+        // If we have models but no groups, convert them
+        if (data.models && data.models.length > 0 && (!data.groups || data.groups.length === 0)) {
+            data.groups = modelsToGroups(data.models);
+        }
+        return data;
+    }
+    catch (error) {
+        console.error("[antigravity-stats] Error loading quota cache:", error);
+        return null;
+    }
+}
+/**
+ * Saves server quota cache to disk
+ * Writes in format compatible with Python script (quota_cache.json)
+ */
+export async function saveServerQuotaCache(cache) {
+    try {
+        // Ensure directory exists
+        const dir = dirname(QUOTA_CACHE_FILE);
+        if (!existsSync(dir)) {
+            await mkdir(dir, { recursive: true });
+        }
+        // Convert timestamp to ISO string if it's a number (for Python compatibility)
+        const cacheToSave = { ...cache };
+        if (typeof cacheToSave.timestamp === 'number') {
+            cacheToSave.timestamp = new Date(cacheToSave.timestamp).toISOString();
+        }
+        // Ensure we have models array for Python script compatibility
+        // If we only have groups, convert them back to models format
+        if ((!cacheToSave.models || cacheToSave.models.length === 0) && cacheToSave.groups && cacheToSave.groups.length > 0) {
+            cacheToSave.models = cacheToSave.groups.map(g => ({
+                label: g.name,
+                model_id: `GROUP_${g.name.toUpperCase().replace(/\s+/g, '_')}`,
+                remaining_percent: g.remaining_percent,
+                reset_time: g.reset_time,
+                is_exhausted: g.remaining_percent === 0,
+            }));
+        }
+        await writeFile(QUOTA_CACHE_FILE, JSON.stringify(cacheToSave, null, 2), "utf-8");
+    }
+    catch (error) {
+        console.error("[antigravity-stats] Error saving quota cache:", error);
+    }
 }
 //# sourceMappingURL=storage.js.map

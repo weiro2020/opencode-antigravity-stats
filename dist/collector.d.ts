@@ -9,7 +9,8 @@ export type ToastCallback = (title: string, message: string, variant: "info" | "
  * Determines the model group for quota tracking
  * Solo trackea modelos de Antigravity (provider google)
  * - claude: modelos Claude
- * - gemini: modelos Gemini
+ * - pro: modelos Gemini Pro
+ * - flash: modelos Gemini Flash
  * - other: cualquier otro (no se trackea quota)
  */
 export declare function getModelGroup(providerID: string, modelID: string): ModelGroup;
@@ -29,6 +30,9 @@ export declare class StatsCollector {
     private saveDebounceTimer;
     private requestTimestamps;
     private accountStats;
+    private serverQuotaCache;
+    private quotaFetchInterval;
+    private quotaFetchStarted;
     constructor();
     /**
      * Initializes the collector
@@ -63,25 +67,6 @@ export declare class StatsCollector {
         modelGroup: ModelGroup;
     }>>;
     /**
-     * Calibrates quota estimation for an account
-     * Call this when user provides current % from AntigravityQuota extension
-     * @param email Account email
-     * @param percentRemaining Current % remaining
-     * @param modelGroup Model group to calibrate (claude or gemini)
-     */
-    calibrateQuota(email: string, percentRemaining: number, modelGroup?: ModelGroup): void;
-    /**
-     * Calibrates quota with manual limits (when auto-calculation isn't possible)
-     * Use this when the user has low usage but knows the actual limits
-     * @param email Account email
-     * @param percentRemaining Current % remaining from AntigravityQuota
-     * @param estimatedTokenLimit Manual estimate of total token limit
-     * @param estimatedRequestLimit Manual estimate of total request limit
-     * @param windowAgeMinutes How old is the current window (in minutes)
-     * @param modelGroup Model group to calibrate (claude or gemini)
-     */
-    calibrateQuotaManual(email: string, percentRemaining: number, estimatedTokenLimit: number, estimatedRequestLimit: number, windowAgeMinutes?: number, modelGroup?: ModelGroup): void;
-    /**
      * Gets current RPM (Requests Per Minute) based on last 60 seconds
      */
     getRPM(): number;
@@ -111,6 +96,48 @@ export declare class StatsCollector {
      * Schedules a debounced save
      */
     private scheduleSave;
+    /**
+     * Starts the quota fetching process
+     * Called on first message, sets up interval for every 60 seconds
+     * Note: First fetch is done in initialize() to ensure data is ready
+     */
+    startQuotaFetching(): void;
+    /**
+     * Fetches quota from the server using the quota command
+     * Updates serverQuotaCache and persists to disk on success
+     */
+    fetchServerQuota(): Promise<void>;
+    /**
+     * Gets server quota data for a specific model group
+     * Maps server group names to ModelGroup values
+     * Calculates timeUntilReset dynamically from reset_time
+     */
+    getServerQuotaForGroup(group: ModelGroup): {
+        percent: number | null;
+        timeUntilReset: string;
+        resetTime: string | null;
+        isFromCache: boolean;
+    } | null;
+    /**
+     * Calculates time remaining until reset from ISO timestamp
+     */
+    private calculateTimeUntilReset;
+    /**
+     * Gets quota stats for all 3 groups, combining server data with local tracking
+     * Returns groups ordered with active group first, then CL, PR, FL
+     * @param activeGroup - The currently active model group
+     */
+    getQuotaStatsAllGroups(activeGroup: ModelGroup): Promise<Array<{
+        group: ModelGroup;
+        label: string;
+        rpm: number;
+        requestsCount: number;
+        tokensUsed: number;
+        percentRemaining: number | null;
+        timeUntilReset: string;
+        isFromCache: boolean;
+        isActive: boolean;
+    }>>;
     /**
      * Gets current stats
      */

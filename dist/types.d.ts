@@ -114,28 +114,41 @@ export interface AccountState {
     lastUsed: number;
 }
 export type AccountStateMap = Record<string, AccountState>;
-export type ModelGroup = "claude" | "gemini" | "other";
+export type ModelGroup = "claude" | "pro" | "flash" | "other";
+export interface ServerQuotaModel {
+    label: string;
+    model_id: string;
+    remaining_percent: number;
+    reset_time: string;
+    is_exhausted: boolean;
+}
+export interface ServerQuotaGroup {
+    name: string;
+    remaining_percent: number;
+    reset_time: string;
+    time_until_reset: string;
+}
+export interface ServerQuotaCache {
+    email: string;
+    plan_name?: string;
+    timestamp: string | number;
+    models?: ServerQuotaModel[];
+    prompt_credits_available?: number;
+    prompt_credits_monthly?: number;
+    flow_credits_available?: number;
+    flow_credits_monthly?: number;
+    groups?: ServerQuotaGroup[];
+    isFromCache?: boolean;
+}
 export interface QuotaWindow {
     windowStart: number;
     tokensUsed: number;
     requestsCount: number;
 }
-export interface QuotaCalibration {
-    tokensAtCalibration: number;
-    requestsAtCalibration: number;
-    percentRemaining: number;
-    timestamp: number;
-    estimatedTokenLimit: number;
-    estimatedRequestLimit: number;
-}
 export interface AccountQuotaTracking {
     windows: {
         [group in ModelGroup]?: QuotaWindow;
     };
-    calibrations?: {
-        [group in ModelGroup]?: QuotaCalibration;
-    };
-    calibration?: QuotaCalibration;
 }
 export interface QuotaTrackingData {
     [email: string]: AccountQuotaTracking;

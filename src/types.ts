@@ -155,9 +155,51 @@ export type AccountStateMap = Record<string, AccountState>;
 
 // Grupos de modelos para quota (comparten límite)
 // - claude: modelos Claude de Antigravity (provider google)
-// - gemini: modelos Gemini de Antigravity (provider google)
+// - pro: modelos Gemini Pro de Antigravity (provider google)
+// - flash: modelos Gemini Flash de Antigravity (provider google)
 // - other: cualquier otro modelo (no se trackea quota)
-export type ModelGroup = "claude" | "gemini" | "other";
+export type ModelGroup = "claude" | "pro" | "flash" | "other";
+
+// ============================================
+// Server Quota Cache Types (from quota command)
+// ============================================
+
+// Individual model quota (format used by Python script)
+export interface ServerQuotaModel {
+  label: string;                    // "Claude Sonnet 4.5", "Gemini 3 Pro (High)", etc.
+  model_id: string;                 // "MODEL_CLAUDE_4_5_SONNET", etc.
+  remaining_percent: number;        // 92.5
+  reset_time: string;               // ISO timestamp
+  is_exhausted: boolean;            // true if remaining is 0
+}
+
+// Quota data for a single group from the server
+export interface ServerQuotaGroup {
+  name: string;                    // "Claude", "Gemini 3 Pro", "Gemini 3 Flash"
+  remaining_percent: number;       // 92.5
+  reset_time: string;              // ISO timestamp
+  time_until_reset: string;        // "4h20m"
+}
+
+// Cache of server quota data (persisted to disk)
+// Compatible with Python script format (quota_cache.json)
+export interface ServerQuotaCache {
+  // Common fields
+  email: string;                   // Active account email
+  plan_name?: string;              // "Pro", etc.
+  timestamp: string | number;      // ISO string (Python) or Unix ms (plugin)
+  
+  // Python script format
+  models?: ServerQuotaModel[];     // Individual models (Python format)
+  prompt_credits_available?: number;
+  prompt_credits_monthly?: number;
+  flow_credits_available?: number;
+  flow_credits_monthly?: number;
+  
+  // Plugin format (computed from models)
+  groups?: ServerQuotaGroup[];     // Grouped quotas
+  isFromCache?: boolean;           // True if using cached data (LS not available)
+}
 
 // Ventana de 5 horas de quota
 export interface QuotaWindow {
@@ -166,29 +208,12 @@ export interface QuotaWindow {
   requestsCount: number;    // requests en esta ventana
 }
 
-// Calibración de límite para estimar %
-export interface QuotaCalibration {
-  tokensAtCalibration: number;    // tokens cuando se calibró
-  requestsAtCalibration: number;  // requests cuando se calibró
-  percentRemaining: number;       // % reportado por usuario
-  timestamp: number;              // cuándo se calibró
-  // Límites estimados (calculados)
-  estimatedTokenLimit: number;
-  estimatedRequestLimit: number;
-}
-
-// Tracking completo de quota por cuenta
+// Tracking de quota por cuenta
 export interface AccountQuotaTracking {
   // Ventana actual por grupo de modelo
   windows: {
     [group in ModelGroup]?: QuotaWindow;
   };
-  // Calibración por grupo (cada grupo tiene su propio límite)
-  calibrations?: {
-    [group in ModelGroup]?: QuotaCalibration;
-  };
-  // DEPRECATED: calibración compartida (mantener para migración)
-  calibration?: QuotaCalibration;
 }
 
 // Agregar al StatsData

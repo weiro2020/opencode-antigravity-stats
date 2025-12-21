@@ -35,8 +35,10 @@ export const plugin: Plugin = async ({ client }) => {
   };
 
   // Actualiza el título de la sesión con las stats de quota
-  // Formato: [C] !CR:4/20,92%,4h20,1.8M | CA:3/15,85%,3h45,1.2M | NA:0/5,?,5h0,0
-  // Donde: [C] = grupo activo (Claude), 4/20 = 4 RPM actual, 20 requests acumuladas en ventana de 5h
+  // Formato: [CL] CL:4/20,92%,4h20,1.8M | PR:100%,5h | FL:95%,4h35
+  // Grupo activo: completo (rpm/req, %, time, tokens)
+  // Grupos inactivos: compacto (solo % y time)
+  // ! antes del % indica que usa cache/fallback
   const updateSessionTitle = async (sessionID: string, providerID: string, modelID: string) => {
     if (!collector) return;
 
@@ -53,23 +55,36 @@ export const plugin: Plugin = async ({ client }) => {
         return;
       }
 
-      const quotaStats = await collector.getQuotaStats(activeGroup);
+      // Get all 3 groups with combined server + local data
+      const allGroups = await collector.getQuotaStatsAllGroups(activeGroup);
 
-      // Format: [C] !CR:4/20,92%,4h20,1.8M | CA:3/15,?,3h45,1.2M
-      // [C/G] = grupo activo, ! = rate limited, prefix, rpm/accumulated, %, time until reset, tokens used
-      const groupLabel = activeGroup === "claude" ? "C" : "G";
-      const parts = quotaStats.map((acct) => {
-        const prefix = acct.isRateLimited ? `!${acct.prefix}` : acct.prefix;
-        const pct = acct.percentRemaining !== null 
-          ? `${Math.round(acct.percentRemaining)}%` 
+      // Build title parts
+      // Active: CL:4/20,92%,4h20,1.8M
+      // Inactive: PR:100%,5h
+      const parts = allGroups.map((g) => {
+        const pctPrefix = g.isFromCache ? "!" : "";
+        const pct = g.percentRemaining !== null 
+          ? `${pctPrefix}${Math.round(g.percentRemaining)}%` 
           : "?";
-        const rpmReq = `${acct.rpm}/${acct.requestsCount}`;
-        return `${prefix}:${rpmReq},${pct},${acct.timeUntilReset},${formatTokens(acct.tokensUsed)}`;
+        
+        if (g.isActive) {
+          // Grupo activo: formato completo
+          return `${g.label}:${g.rpm}/${g.requestsCount},${pct},${g.timeUntilReset},${formatTokens(g.tokensUsed)}`;
+        } else {
+          // Grupos inactivos: agregamos requests acumulados
+          return `${g.label}:${g.requestsCount},${pct},${g.timeUntilReset}`;
+        }
       });
 
-      const title = parts.length > 0 
-        ? `[${groupLabel}] ${parts.join(" | ")}` 
-        : "No accounts";
+      // Group label for the active group
+      const groupLabels: Record<ModelGroup, string> = {
+        claude: "CL",
+        pro: "PR",
+        flash: "FL",
+        other: "?",
+      };
+
+      const title = `[${groupLabels[activeGroup]}] ${parts.join(" | ")}`;
 
       await client.session.update({
         path: { id: sessionID },
@@ -108,6 +123,9 @@ export const plugin: Plugin = async ({ client }) => {
             cacheRead: msg.tokens.cache?.read || 0,
             cacheWrite: msg.tokens.cache?.write || 0,
           });
+
+          // Start quota fetching on first message (runs immediately + every 60s)
+          collector.startQuotaFetching();
 
           // Actualizar título de sesión en sidebar
           await updateSessionTitle(msg.sessionID, msg.providerID, msg.modelID);
