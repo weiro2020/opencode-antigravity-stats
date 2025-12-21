@@ -1,0 +1,5 @@
+{
+  "port": 50001,
+  "csrf_token": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "windows_ls_port": 53964
+}

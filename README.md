@@ -309,6 +309,86 @@ Session title updated with combined local + server data
 
 ---
 
+## 🔗 SSH Tunnel (Alternative to Local LS)
+
+If the local Language Server has delayed quota data, you can use an SSH tunnel to connect directly to the Windows LS for real-time data.
+
+### Why Use the Tunnel?
+
+| Method | Advantage | Disadvantage |
+|--------|-----------|--------------|
+| Local LS (VPS) | No Windows needed | Quota data may be delayed |
+| SSH Tunnel | Real-time data | Requires active tunnel |
+
+### Architecture
+
+```
+┌─────────────────────────┐         SSH Tunnel          ┌─────────────────────────┐
+│  Linux VPS              │ <────────────────────────── │  Windows PC             │
+│                         │     localhost:50001         │                         │
+│  OpenCode               │          ↕                  │  Antigravity IDE        │
+│  Plugin Stats           │     (reverse tunnel)        │  Language Server        │
+│  quota script           │                             │  (local HTTP port)      │
+└─────────────────────────┘                             └─────────────────────────┘
+```
+
+### Automatic Setup (Recommended)
+
+Run `setup_tunnel.ps1` on Windows (PowerShell):
+
+```powershell
+.\setup_tunnel.ps1
+```
+
+The script automatically:
+1. Detects the Language Server process
+2. Extracts the CSRF token
+3. Detects the HTTP port
+4. Updates `tunnel_config.json` on the VPS via SSH
+5. Starts the tunnel with keep-alive
+
+### Manual Setup
+
+1. **On Windows**, get the LS port and CSRF token
+2. **Create tunnel** from Windows:
+   ```powershell
+   ssh -o ServerAliveInterval=60 -R 50001:127.0.0.1:<LS_PORT> user@vps -p 22
+   ```
+3. **Create config** on VPS:
+   ```bash
+   echo '{"port": 50001, "csrf_token": "<TOKEN>", "windows_ls_port": <PORT>}' > ~/.antigravity-standalone/tunnel_config.json
+   ```
+
+### Tunnel Files
+
+| File | Purpose |
+|------|---------|
+| `scripts/setup_tunnel.ps1` | Windows PowerShell script (copy to your PC) |
+| `scripts/get_quota_tunnel.py` | Alternative Python script (tunnel only) |
+| `tunnel_config.example.json` | Configuration template |
+
+### Data Source Priority
+
+The `quota` script uses these sources in order:
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 | Local LS | If a LS is running on the VPS |
+| 2 | SSH Tunnel | If local LS is unavailable and tunnel is active |
+| 3 | Cache | If no live source is available |
+
+### Verify Tunnel
+
+```bash
+# Check if tunnel is listening
+ss -tunlp | grep 50001
+
+# Test quota via tunnel
+quota --tunnel
+```
+
+---
+
 *Made with ❤️ by DevCatanzaro*
 
 ---

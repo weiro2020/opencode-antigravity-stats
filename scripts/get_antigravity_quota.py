@@ -25,6 +25,11 @@ from typing import Optional, List, Dict, Any
 
 # Cache file location
 CACHE_FILE = Path.home() / ".antigravity-standalone" / "quota_cache.json"
+TUNNEL_CONFIG_FILE = Path.home() / ".antigravity-standalone" / "tunnel_config.json"
+
+# Default tunnel settings (overridden by tunnel_config.json if exists)
+TUNNEL_PORT = 50001
+TUNNEL_CSRF_TOKEN = ""
 
 
 @dataclass
@@ -278,6 +283,70 @@ def load_quota_from_cache() -> Optional[QuotaSnapshot]:
         return None
 
 
+def load_tunnel_config() -> tuple[int, str]:
+    """Load tunnel configuration from file."""
+    global TUNNEL_PORT, TUNNEL_CSRF_TOKEN
+    
+    if TUNNEL_CONFIG_FILE.exists():
+        try:
+            with open(TUNNEL_CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+            return config.get('port', TUNNEL_PORT), config.get('csrf_token', '')
+        except (json.JSONDecodeError, KeyError):
+            pass
+    
+    return TUNNEL_PORT, TUNNEL_CSRF_TOKEN
+
+
+def is_tunnel_available(port: int) -> bool:
+    """Check if the tunnel port is listening."""
+    try:
+        result = subprocess.run(
+            ["ss", "-tln"],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        return f":{port} " in result.stdout or f":{port}\t" in result.stdout
+    except:
+        return False
+
+
+def fetch_quota_via_tunnel(port: int, csrf_token: str) -> Optional[QuotaSnapshot]:
+    """Fetch quota from the Windows Language Server via SSH tunnel."""
+    if not csrf_token:
+        return None
+    
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                f"http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus",
+                "-H", "Content-Type: application/json",
+                "-H", "Accept: application/json",
+                "-H", "Connect-Protocol-Version: 1",
+                "-H", f"x-codeium-csrf-token: {csrf_token}",
+                "-d", '{"metadata":{"ideName":"antigravity","apiKey":"","locale":"en-US","os":"linux"}}',
+                "--connect-timeout", "5"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        
+        data = json.loads(result.stdout)
+        snapshot = parse_quota_response(data)
+        # Mark as not cached since it's live from tunnel
+        snapshot.is_cached = False
+        return snapshot
+        
+    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+        return None
+
+
 def format_time_remaining(reset_time_str: str) -> str:
     """Format the time remaining until reset."""
     if not reset_time_str:
@@ -484,32 +553,59 @@ def main():
     parser.add_argument('--cached', action='store_true', help='Use cached data only (no live fetch)')
     parser.add_argument('--no-color', action='store_true', help='Disable color output')
     parser.add_argument('--quiet', action='store_true', help='Suppress status messages')
+    parser.add_argument('--tunnel', action='store_true', help='Force use tunnel (skip local LS)')
     
     args = parser.parse_args()
     
     snapshot = None
+    source = None
     
     # Try live fetch first (unless --cached)
     if not args.cached:
-        ls_info = find_language_server()
-        
-        if ls_info:
-            if not args.quiet:
-                print(f"Found Language Server (PID: {ls_info.pid}, Port: {ls_info.http_port})", file=sys.stderr)
-            snapshot = fetch_quota(ls_info)
+        # Try local LS first (unless --tunnel forces tunnel)
+        if not args.tunnel:
+            ls_info = find_language_server()
             
-            if snapshot and args.save:
-                save_quota_to_cache(snapshot)
-        else:
-            if not args.quiet:
-                print("No Language Server found, using cache...", file=sys.stderr)
+            if ls_info:
+                if not args.quiet:
+                    print(f"Found Language Server (PID: {ls_info.pid}, Port: {ls_info.http_port})", file=sys.stderr)
+                snapshot = fetch_quota(ls_info)
+                source = "local"
+                
+                if snapshot and args.save:
+                    save_quota_to_cache(snapshot)
+            else:
+                if not args.quiet:
+                    print("No Language Server found, trying tunnel...", file=sys.stderr)
+        
+        # Fallback to tunnel if local LS not available
+        if not snapshot:
+            tunnel_port, tunnel_csrf = load_tunnel_config()
+            
+            if tunnel_csrf and is_tunnel_available(tunnel_port):
+                if not args.quiet:
+                    print(f"Trying tunnel on port {tunnel_port}...", file=sys.stderr)
+                snapshot = fetch_quota_via_tunnel(tunnel_port, tunnel_csrf)
+                
+                if snapshot:
+                    source = "tunnel"
+                    if not args.quiet:
+                        print("Quota fetched via tunnel", file=sys.stderr)
+                    if args.save:
+                        save_quota_to_cache(snapshot)
+            elif not args.quiet:
+                if not tunnel_csrf:
+                    print("Tunnel not configured (no CSRF token)", file=sys.stderr)
+                else:
+                    print(f"Tunnel port {tunnel_port} not available", file=sys.stderr)
     
     # Fall back to cache
     if not snapshot:
         snapshot = load_quota_from_cache()
+        source = "cache"
         
         if not snapshot:
-            print("Error: No quota data available (no LS running and no cache).", file=sys.stderr)
+            print("Error: No quota data available (no LS, no tunnel, no cache).", file=sys.stderr)
             sys.exit(1)
     
     # Output
