@@ -442,8 +442,24 @@ export class StatsCollector {
             clearTimeout(this.saveDebounceTimer);
         }
         this.saveDebounceTimer = setTimeout(async () => {
+            // Update RPM data before saving so external scripts can read it
+            this.updateRpmData();
             await saveStats(this.stats);
         }, 1000);
+    }
+    /**
+     * Updates RPM data in stats for external scripts to read
+     */
+    updateRpmData() {
+        this.cleanTimestamps();
+        const now = Date.now();
+        // Filter timestamps to only include last 60 seconds
+        const recentTimestamps = this.requestTimestamps.filter(t => now - t < 60000);
+        this.stats.rpmData = {
+            rpm: recentTimestamps.length,
+            timestamps: recentTimestamps,
+            updatedAt: now,
+        };
     }
     // ============================================
     // Server Quota Fetching (from quota command)

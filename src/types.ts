@@ -85,6 +85,14 @@ export interface StatsData {
   errors: ErrorStats;
   daily: Record<string, DailyStats>;
   quotaTracking?: QuotaTrackingData;
+  rpmData?: RpmData;  // RPM data for external scripts
+}
+
+// RPM data persisted for external scripts to read
+export interface RpmData {
+  rpm: number;                    // Current RPM (requests in last 60s)
+  timestamps: number[];           // Recent request timestamps (last 60s)
+  updatedAt: number;              // When this was last updated (Unix ms)
 }
 
 // ============================================

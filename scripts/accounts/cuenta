@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""
+Sistema de gestión de cuentas Antigravity para OpenCode.
+
+Permite seleccionar manualmente qué cuenta usar, evitando la rotación automática.
+
+Uso:
+    cuenta              Ver cuenta activa y estado
+    cuenta list         Listar cuentas disponibles
+    cuenta <prefijo>    Cambiar a cuenta (ej: cuenta cri)
+    cuenta add          Agregar nueva cuenta (interactivo)
+"""
+
+import json
+import os
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# Rutas de configuración
+CONFIG_DIR = Path.home() / ".config" / "opencode"
+ACCOUNTS_DIR = CONFIG_DIR / "antigravity-accounts"
+ACTIVE_FILE = CONFIG_DIR / "antigravity-accounts.json"
+
+# Colores ANSI
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+RED = '\033[91m'
+CYAN = '\033[96m'
+BOLD = '\033[1m'
+DIM = '\033[2m'
+RESET = '\033[0m'
+
+
+def get_prefix(email: str) -> str:
+    """Extrae las primeras 3 letras del email (antes del @)."""
+    local_part = email.split("@")[0]
+    return local_part[:3].lower()
+
+
+def load_active_account() -> dict | None:
+    """Carga la cuenta activa desde antigravity-accounts.json."""
+    if not ACTIVE_FILE.exists():
+        return None
+    try:
+        with open(ACTIVE_FILE, "r") as f:
+            data = json.load(f)
+        if data.get("accounts") and len(data["accounts"]) > 0:
+            return data["accounts"][0]
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return None
+
+
+def list_available_accounts() -> list[dict]:
+    """Lista todas las cuentas disponibles en el directorio."""
+    accounts = []
+    if not ACCOUNTS_DIR.exists():
+        return accounts
+    
+    for file in sorted(ACCOUNTS_DIR.glob("*.json")):
+        try:
+            with open(file, "r") as f:
+                data = json.load(f)
+            if data.get("accounts") and len(data["accounts"]) > 0:
+                acc = data["accounts"][0]
+                acc["_prefix"] = file.stem
+                acc["_file"] = file
+                accounts.append(acc)
+        except (json.JSONDecodeError, KeyError):
+            continue
+    
+    return accounts
+
+
+def format_time_ago(timestamp_ms: int) -> str:
+    """Formatea un timestamp como 'hace X minutos/horas'."""
+    if timestamp_ms == 0:
+        return "nunca"
+    
+    now = datetime.now().timestamp() * 1000
+    diff_ms = now - timestamp_ms
+    diff_secs = diff_ms / 1000
+    
+    if diff_secs < 60:
+        return "hace menos de 1 minuto"
+    elif diff_secs < 3600:
+        mins = int(diff_secs / 60)
+        return f"hace {mins} minuto{'s' if mins != 1 else ''}"
+    elif diff_secs < 86400:
+        hours = int(diff_secs / 3600)
+        return f"hace {hours} hora{'s' if hours != 1 else ''}"
+    else:
+        days = int(diff_secs / 86400)
+        return f"hace {days} día{'s' if days != 1 else ''}"
+
+
+def format_time_until(timestamp_ms: int) -> str:
+    """Formatea tiempo restante hasta un timestamp."""
+    if timestamp_ms == 0:
+        return "?"
+    
+    now = datetime.now().timestamp() * 1000
+    diff_ms = timestamp_ms - now
+    
+    if diff_ms <= 0:
+        return "ahora"
+    
+    diff_secs = diff_ms / 1000
+    hours = int(diff_secs / 3600)
+    mins = int((diff_secs % 3600) / 60)
+    
+    if hours > 0:
+        return f"{hours}h{mins}m"
+    return f"{mins}m"
+
+
+def cmd_status():
+    """Muestra el estado de la cuenta activa."""
+    active = load_active_account()
+    available = list_available_accounts()
+    
+    if not active:
+        print(f"{RED}No hay cuenta activa configurada.{RESET}")
+        if available:
+            prefixes = ", ".join(a["_prefix"] for a in available)
+            print(f"\nCuentas disponibles: {prefixes}")
+            print(f"Usa: {CYAN}cuenta <prefijo>{RESET} para activar una.")
+        return
+    
+    prefix = get_prefix(active.get("email", "???"))
+    email = active.get("email", "desconocido")
+    is_rate_limited = active.get("isRateLimited", False)
+    reset_time = active.get("rateLimitResetTime", 0)
+    last_used = active.get("lastUsed", 0)
+    
+    print(f"\n{BOLD}Cuenta activa:{RESET} {CYAN}{prefix}{RESET} ({email})")
+    
+    if is_rate_limited:
+        time_until = format_time_until(reset_time)
+        print(f"Estado: {RED}RATE LIMITED{RESET} (reset en {time_until})")
+    else:
+        print(f"Estado: {GREEN}OK{RESET}")
+    
+    if last_used > 0:
+        print(f"Última vez usada: {format_time_ago(last_used)}")
+    
+    # Mostrar cuentas disponibles
+    if available:
+        prefixes = ", ".join(a["_prefix"] for a in available)
+        print(f"\n{DIM}Cuentas disponibles: {prefixes}{RESET}")
+
+
+def cmd_list():
+    """Lista todas las cuentas disponibles."""
+    available = list_available_accounts()
+    active = load_active_account()
+    active_email = active.get("email") if active else None
+    
+    if not available:
+        print(f"{YELLOW}No hay cuentas configuradas.{RESET}")
+        print(f"Usa: {CYAN}cuenta add{RESET} para agregar una.")
+        return
+    
+    print(f"\n{BOLD}Cuentas disponibles:{RESET}\n")
+    
+    for acc in available:
+        prefix = acc["_prefix"]
+        email = acc.get("email", "desconocido")
+        is_active = email == active_email
+        is_rate_limited = acc.get("isRateLimited", False)
+        
+        # Indicador de activa
+        marker = f"{GREEN}*{RESET} " if is_active else "  "
+        
+        # Estado
+        if is_rate_limited:
+            reset_time = acc.get("rateLimitResetTime", 0)
+            time_until = format_time_until(reset_time)
+            status = f"{RED}[RATE LIMITED - reset en {time_until}]{RESET}"
+        else:
+            status = f"{GREEN}[OK]{RESET}"
+        
+        print(f"{marker}{CYAN}{prefix}{RESET}  {email}  {status}")
+    
+    print()
+
+
+def cmd_switch(prefix: str):
+    """Cambia a una cuenta específica."""
+    available = list_available_accounts()
+    
+    # Buscar cuenta por prefijo
+    target = None
+    for acc in available:
+        if acc["_prefix"] == prefix:
+            target = acc
+            break
+    
+    if not target:
+        print(f"{RED}Cuenta '{prefix}' no encontrada.{RESET}")
+        if available:
+            prefixes = ", ".join(a["_prefix"] for a in available)
+            print(f"Cuentas disponibles: {prefixes}")
+        return
+    
+    # Copiar archivo de cuenta al archivo activo
+    source_file = target["_file"]
+    try:
+        shutil.copy(source_file, ACTIVE_FILE)
+        email = target.get("email", "desconocido")
+        print(f"{GREEN}Cambiado a:{RESET} {CYAN}{prefix}{RESET} ({email})")
+        print(f"\n{YELLOW}Reinicia OpenCode para aplicar.{RESET}")
+    except Exception as e:
+        print(f"{RED}Error al cambiar cuenta: {e}{RESET}")
+
+
+def cmd_add():
+    """Agrega una nueva cuenta de forma interactiva."""
+    print(f"\n{BOLD}Agregar nueva cuenta{RESET}\n")
+    
+    # Solicitar datos
+    try:
+        email = input("Email: ").strip()
+        if not email or "@" not in email:
+            print(f"{RED}Email inválido.{RESET}")
+            return
+        
+        refresh_token = input("Refresh Token: ").strip()
+        if not refresh_token:
+            print(f"{RED}Refresh token requerido.{RESET}")
+            return
+        
+        project_id = input("Project ID (Enter para omitir): ").strip()
+        managed_project_id = input("Managed Project ID (Enter para omitir): ").strip()
+    except KeyboardInterrupt:
+        print("\nCancelado.")
+        return
+    
+    # Generar prefijo
+    prefix = get_prefix(email)
+    
+    # Verificar si ya existe
+    target_file = ACCOUNTS_DIR / f"{prefix}.json"
+    if target_file.exists():
+        print(f"{YELLOW}Ya existe una cuenta con prefijo '{prefix}'.{RESET}")
+        try:
+            confirm = input("¿Sobrescribir? (s/N): ").strip().lower()
+            if confirm != "s":
+                print("Cancelado.")
+                return
+        except KeyboardInterrupt:
+            print("\nCancelado.")
+            return
+    
+    # Crear estructura de cuenta
+    account_data = {
+        "version": 1,
+        "accounts": [
+            {
+                "email": email,
+                "refreshToken": refresh_token,
+                "projectId": project_id or "",
+                "managedProjectId": managed_project_id or project_id or "",
+                "addedAt": int(datetime.now().timestamp() * 1000),
+                "lastUsed": 0,
+                "isRateLimited": False,
+                "rateLimitResetTime": 0
+            }
+        ],
+        "activeIndex": 0
+    }
+    
+    # Guardar
+    ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(target_file, "w") as f:
+            json.dump(account_data, f, indent=2)
+        print(f"\n{GREEN}Cuenta '{prefix}' agregada correctamente.{RESET}")
+        print(f"Usa: {CYAN}cuenta {prefix}{RESET} para activarla.")
+    except Exception as e:
+        print(f"{RED}Error al guardar: {e}{RESET}")
+
+
+def main():
+    args = sys.argv[1:]
+    
+    if len(args) == 0:
+        cmd_status()
+    elif args[0] == "list":
+        cmd_list()
+    elif args[0] == "add":
+        cmd_add()
+    elif args[0] == "help" or args[0] == "--help" or args[0] == "-h":
+        print(__doc__)
+    else:
+        # Asumir que es un prefijo de cuenta
+        cmd_switch(args[0])
+
+
+if __name__ == "__main__":
+    main()

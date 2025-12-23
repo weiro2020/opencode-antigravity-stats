@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+Limpia cuentas deslogueadas del tracking de antigravity-stats.json
+
+Uso: limpiar-cuentas
+     (ejecutar con OpenCode cerrado)
+"""
+
+import json
+import os
+import sys
+
+CONFIG_DIR = os.path.expanduser("~/.config/opencode")
+STATS_FILE = os.path.join(CONFIG_DIR, "antigravity-stats.json")
+ACCOUNTS_DIR = os.path.join(CONFIG_DIR, "antigravity-accounts")
+
+# Colores
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+RESET = '\033[0m'
+
+
+def get_cuentas_activas():
+    """Obtiene las cuentas que tienen archivo en antigravity-accounts/"""
+    cuentas = set()
+    if not os.path.exists(ACCOUNTS_DIR):
+        return cuentas
+    
+    for filename in os.listdir(ACCOUNTS_DIR):
+        if filename.endswith('.json'):
+            filepath = os.path.join(ACCOUNTS_DIR, filename)
+            try:
+                with open(filepath) as f:
+                    data = json.load(f)
+                if data.get('accounts') and len(data['accounts']) > 0:
+                    email = data['accounts'][0].get('email')
+                    if email:
+                        cuentas.add(email)
+            except (json.JSONDecodeError, KeyError):
+                continue
+    
+    return cuentas
+
+
+def limpiar():
+    if not os.path.exists(STATS_FILE):
+        print(f"{YELLOW}No existe {STATS_FILE}{RESET}")
+        return
+    
+    # Cargar stats
+    with open(STATS_FILE) as f:
+        stats = json.load(f)
+    
+    cuentas_activas = get_cuentas_activas()
+    
+    if not cuentas_activas:
+        print(f"{YELLOW}No se encontraron cuentas activas en {ACCOUNTS_DIR}{RESET}")
+        return
+    
+    print(f"Cuentas activas: {', '.join(cuentas_activas)}\n")
+    
+    eliminadas = 0
+    
+    # Limpiar quotaTracking
+    if 'quotaTracking' in stats:
+        cuentas_a_eliminar = [email for email in stats['quotaTracking'] if email not in cuentas_activas]
+        for email in cuentas_a_eliminar:
+            del stats['quotaTracking'][email]
+            print(f"{RED}Eliminada de quotaTracking:{RESET} {email}")
+            eliminadas += 1
+    
+    # Limpiar daily.byAccount
+    if 'daily' in stats:
+        for day, daily_stats in stats['daily'].items():
+            if 'byAccount' in daily_stats:
+                cuentas_a_eliminar = [email for email in daily_stats['byAccount'] if email not in cuentas_activas]
+                for email in cuentas_a_eliminar:
+                    del daily_stats['byAccount'][email]
+                    print(f"{RED}Eliminada de daily[{day}]:{RESET} {email}")
+                    eliminadas += 1
+    
+    # Limpiar rateLimits.history
+    if 'rateLimits' in stats and 'history' in stats['rateLimits']:
+        antes = len(stats['rateLimits']['history'])
+        stats['rateLimits']['history'] = [
+            entry for entry in stats['rateLimits']['history'] 
+            if entry.get('account') in cuentas_activas
+        ]
+        despues = len(stats['rateLimits']['history'])
+        if antes != despues:
+            print(f"{RED}Eliminadas {antes - despues} entradas de rateLimits.history{RESET}")
+            eliminadas += antes - despues
+    
+    if eliminadas == 0:
+        print(f"{GREEN}No hay cuentas deslogueadas para limpiar.{RESET}")
+        return
+    
+    # Guardar
+    with open(STATS_FILE, 'w') as f:
+        json.dump(stats, f, indent=2)
+    
+    print(f"\n{GREEN}Limpieza completada. {eliminadas} entradas eliminadas.{RESET}")
+    print(f"{YELLOW}Reinicia OpenCode para aplicar.{RESET}")
+
+
+if __name__ == "__main__":
+    limpiar()

@@ -97,6 +97,10 @@ export declare class StatsCollector {
      */
     private scheduleSave;
     /**
+     * Updates RPM data in stats for external scripts to read
+     */
+    private updateRpmData;
+    /**
      * Starts the quota fetching process
      * Called on first message, sets up interval for every 60 seconds
      * Note: First fetch is done in initialize() to ensure data is ready

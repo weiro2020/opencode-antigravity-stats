@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""
+Stats script - Combina datos locales + cache del servidor para mostrar al final de cada mensaje.
+
+Lee directamente de archivos sin hacer solicitudes de red:
+- antigravity-stats.json: datos locales (requests, tokens, RPM)
+- quota_cache.json: datos del servidor (%, tiempo) - actualizado por el plugin cada 60s
+
+Uso:
+  stats              # Formato humano
+  stats --json       # Formato JSON
+  stats --oneline    # Formato de una línea para AGENTS.md
+
+Output oneline:
+  [CL] 5rpm/15req,77%,3h22,1.2M | PR:100%,4h57 | FL:100%,4h57
+"""
+
+import json
+import sys
+from pathlib import Path
+from datetime import datetime, timezone
+
+# Paths
+STATS_FILE = Path.home() / ".config/opencode/antigravity-stats.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+QUOTA_CACHE_FILE = SCRIPT_DIR / "quota_cache.json"
+
+# 5 hours in milliseconds
+FIVE_HOURS_MS = 5 * 60 * 60 * 1000
+
+
+def load_local_stats():
+    """Carga stats locales desde antigravity-stats.json"""
+    if not STATS_FILE.exists():
+        return None
+    try:
+        with open(STATS_FILE) as f:
+            return json.load(f)
+    except:
+        return None
+
+
+def load_quota_cache():
+    """Carga cache de quota del servidor (actualizado cada 60s por el plugin)"""
+    if not QUOTA_CACHE_FILE.exists():
+        return None
+    try:
+        with open(QUOTA_CACHE_FILE) as f:
+            return json.load(f)
+    except:
+        return None
+
+
+def get_rpm(stats):
+    """
+    Obtiene el RPM actual desde rpmData.
+    Recalcula basándose en los timestamps si están disponibles.
+    """
+    if not stats or not stats.get("rpmData"):
+        return 0
+    
+    rpm_data = stats["rpmData"]
+    timestamps = rpm_data.get("timestamps", [])
+    
+    if not timestamps:
+        return rpm_data.get("rpm", 0)
+    
+    # Recalcular RPM basándose en timestamps del último minuto
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    recent = [t for t in timestamps if now - t < 60000]
+    return len(recent)
+
+
+def format_tokens(tokens):
+    """Formatea tokens: 1.2M, 500K, etc."""
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    elif tokens >= 1_000:
+        return f"{tokens / 1_000:.0f}K"
+    else:
+        return str(tokens)
+
+
+def calculate_time_until_reset(reset_time_str):
+    """Calcula tiempo restante desde reset_time ISO"""
+    if not reset_time_str:
+        return "?"
+    try:
+        reset_time = datetime.fromisoformat(reset_time_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = reset_time - now
+        
+        if diff.total_seconds() <= 0:
+            return "0m"
+        
+        hours = int(diff.total_seconds() // 3600)
+        minutes = int((diff.total_seconds() % 3600) // 60)
+        
+        if hours > 0:
+            return f"{hours}h{minutes}m"
+        return f"{minutes}m"
+    except:
+        return "?"
+
+
+def get_group_stats(stats, server_data, group_name, model_group):
+    """Obtiene stats para un grupo específico"""
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    
+    # Datos del servidor (del cache)
+    server_group = None
+    if server_data and server_data.get("groups"):
+        for g in server_data["groups"]:
+            if g["name"] == group_name:
+                server_group = g
+                break
+    
+    percent = server_group["remaining_percent"] if server_group else None
+    # Recalcular tiempo desde reset_time para tener valor actualizado
+    reset_time = server_group.get("reset_time") if server_group else None
+    time_until = calculate_time_until_reset(reset_time) if reset_time else "?"
+    
+    # Datos locales - buscar la cuenta activa del servidor
+    requests_count = 0
+    tokens_used = 0
+    
+    if stats and server_data:
+        active_email = server_data.get("email")
+        if active_email and stats.get("quotaTracking"):
+            tracking = stats["quotaTracking"].get(active_email, {})
+            window = tracking.get("windows", {}).get(model_group)
+            if window:
+                # Verificar que la ventana no haya expirado
+                window_age = now - window.get("windowStart", now)
+                if window_age < FIVE_HOURS_MS:
+                    requests_count = window.get("requestsCount", 0)
+                    tokens_used = window.get("tokensUsed", 0)
+    
+    return {
+        "percent": percent,
+        "time": time_until,
+        "requests": requests_count,
+        "tokens": tokens_used
+    }
+
+
+def format_oneline(stats, server_data, active_group="CL"):
+    """Formatea stats en una línea para AGENTS.md"""
+    groups = [
+        ("CL", "Claude", "claude"),
+        ("PR", "Gemini 3 Pro", "pro"),
+        ("FL", "Gemini 3 Flash", "flash")
+    ]
+    
+    # Reordenar para que el grupo activo esté primero
+    if active_group != "CL":
+        for i, (label, _, _) in enumerate(groups):
+            if label == active_group:
+                groups.insert(0, groups.pop(i))
+                break
+    
+    # Obtener RPM global
+    rpm = get_rpm(stats)
+    
+    parts = []
+    for i, (label, server_name, model_group) in enumerate(groups):
+        g = get_group_stats(stats, server_data, server_name, model_group)
+        
+        pct = f"{g['percent']:.0f}%" if g['percent'] is not None else "?%"
+        
+        if i == 0:  # Grupo activo - formato completo con RPM
+            req = g['requests']
+            tokens = format_tokens(g['tokens'])
+            parts.append(f"[{label}] {rpm}rpm/{req}req,{pct},{g['time']},{tokens}")
+        else:  # Otros grupos - formato compacto
+            parts.append(f"{label}:{pct},{g['time']}")
+    
+    return " | ".join(parts)
+
+
+def format_json(stats, server_data):
+    """Formatea stats como JSON"""
+    groups = {}
+    for label, server_name, model_group in [
+        ("claude", "Claude", "claude"),
+        ("pro", "Gemini 3 Pro", "pro"),
+        ("flash", "Gemini 3 Flash", "flash")
+    ]:
+        g = get_group_stats(stats, server_data, server_name, model_group)
+        groups[label] = {
+            "percent": g["percent"],
+            "time_until_reset": g["time"],
+            "requests": g["requests"],
+            "tokens": g["tokens"]
+        }
+    
+    return json.dumps({
+        "email": server_data.get("email") if server_data else None,
+        "rpm": get_rpm(stats),
+        "groups": groups,
+        "session": stats.get("session", {}).get("totals", {}) if stats else {}
+    }, indent=2)
+
+
+def format_human(stats, server_data):
+    """Formatea stats para humanos"""
+    lines = []
+    
+    email = server_data.get("email") if server_data else "Desconocido"
+    rpm = get_rpm(stats)
+    lines.append(f"Cuenta: {email}")
+    lines.append(f"RPM actual: {rpm}")
+    lines.append("")
+    
+    for label, server_name, model_group in [
+        ("Claude", "Claude", "claude"),
+        ("Gemini Pro", "Gemini 3 Pro", "pro"),
+        ("Gemini Flash", "Gemini 3 Flash", "flash")
+    ]:
+        g = get_group_stats(stats, server_data, server_name, model_group)
+        pct = f"{g['percent']:.0f}%" if g['percent'] is not None else "?"
+        lines.append(f"{label}:")
+        lines.append(f"  Quota: {pct} restante, reset en {g['time']}")
+        lines.append(f"  Sesión: {g['requests']} requests, {format_tokens(g['tokens'])} tokens")
+        lines.append("")
+    
+    if stats and stats.get("session"):
+        totals = stats["session"].get("totals", {})
+        lines.append("Totales de sesión:")
+        lines.append(f"  Requests: {totals.get('requests', 0)}")
+        lines.append(f"  Tokens In: {format_tokens(totals.get('tokensIn', 0))}")
+        lines.append(f"  Tokens Out: {format_tokens(totals.get('tokensOut', 0))}")
+    
+    return "\n".join(lines)
+
+
+def main():
+    # Cargar datos de archivos locales (sin red)
+    stats = load_local_stats()
+    server_data = load_quota_cache()
+    
+    # Determinar formato de salida
+    if "--json" in sys.argv:
+        print(format_json(stats, server_data))
+    elif "--oneline" in sys.argv:
+        # Detectar grupo activo (por defecto Claude)
+        active = "CL"
+        for arg in sys.argv:
+            if arg.upper() in ["CL", "PR", "FL"]:
+                active = arg.upper()
+                break
+        if not stats and not server_data:
+            print("[--] Stats no disponibles")
+        else:
+            print(format_oneline(stats, server_data, active))
+    else:
+        if not stats and not server_data:
+            print("Stats no disponibles")
+            print("- No se pudo leer antigravity-stats.json")
+            print("- No se pudo conectar al servidor de quota")
+        else:
+            print(format_human(stats, server_data))
+
+
+if __name__ == "__main__":
+    main()

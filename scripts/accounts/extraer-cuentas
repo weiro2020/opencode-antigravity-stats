@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""
+Extrae cuentas del archivo antigravity-accounts.json a archivos individuales.
+
+Uso: extraer-cuentas
+     (ejecutar con OpenCode cerrado, después de agregar cuentas via plugin OAuth)
+"""
+
+import json
+import os
+import sys
+
+CONFIG_DIR = os.path.expanduser("~/.config/opencode")
+ACCOUNTS_FILE = os.path.join(CONFIG_DIR, "antigravity-accounts.json")
+ACCOUNTS_DIR = os.path.join(CONFIG_DIR, "antigravity-accounts")
+
+# Colores
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+
+
+def get_prefix(email: str) -> str:
+    """Primeras 3 letras del email antes del @"""
+    return email.split("@")[0][:3].lower()
+
+
+def extraer():
+    if not os.path.exists(ACCOUNTS_FILE):
+        print(f"{YELLOW}No existe {ACCOUNTS_FILE}{RESET}")
+        return
+    
+    with open(ACCOUNTS_FILE) as f:
+        data = json.load(f)
+    
+    accounts = data.get("accounts", [])
+    
+    if not accounts:
+        print(f"{YELLOW}No hay cuentas en el archivo.{RESET}")
+        return
+    
+    os.makedirs(ACCOUNTS_DIR, exist_ok=True)
+    
+    # Ver qué cuentas ya existen
+    existentes = set()
+    for filename in os.listdir(ACCOUNTS_DIR):
+        if filename.endswith('.json'):
+            filepath = os.path.join(ACCOUNTS_DIR, filename)
+            try:
+                with open(filepath) as f:
+                    acc_data = json.load(f)
+                if acc_data.get('accounts') and len(acc_data['accounts']) > 0:
+                    existentes.add(acc_data['accounts'][0].get('email'))
+            except:
+                continue
+    
+    nuevas = 0
+    for account in accounts:
+        email = account.get('email')
+        if not email:
+            continue
+        
+        if email in existentes:
+            print(f"  {email} - ya existe")
+            continue
+        
+        prefix = get_prefix(email)
+        filepath = os.path.join(ACCOUNTS_DIR, f"{prefix}.json")
+        
+        # Crear archivo individual
+        individual = {
+            "version": 1,
+            "accounts": [{
+                "email": email,
+                "refreshToken": account.get("refreshToken", ""),
+                "projectId": account.get("projectId", ""),
+                "managedProjectId": account.get("managedProjectId", account.get("projectId", "")),
+                "addedAt": account.get("addedAt", 0),
+                "lastUsed": 0,
+                "isRateLimited": False,
+                "rateLimitResetTime": 0
+            }],
+            "activeIndex": 0
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(individual, f, indent=2)
+        
+        print(f"{GREEN}Creada:{RESET} {prefix}.json ({email})")
+        nuevas += 1
+    
+    if nuevas == 0:
+        print(f"\n{YELLOW}No hay cuentas nuevas para extraer.{RESET}")
+    else:
+        print(f"\n{GREEN}{nuevas} cuenta(s) extraída(s).{RESET}")
+        print(f"\nPara activar una cuenta:")
+        print(f"  {CYAN}cuenta <prefijo>{RESET}")
+
+
+if __name__ == "__main__":
+    extraer()

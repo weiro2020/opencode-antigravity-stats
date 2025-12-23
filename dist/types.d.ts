@@ -70,6 +70,12 @@ export interface StatsData {
     errors: ErrorStats;
     daily: Record<string, DailyStats>;
     quotaTracking?: QuotaTrackingData;
+    rpmData?: RpmData;
+}
+export interface RpmData {
+    rpm: number;
+    timestamps: number[];
+    updatedAt: number;
 }
 export interface AntigravityAccount {
     email: string;
