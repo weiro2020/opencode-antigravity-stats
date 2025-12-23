@@ -7,11 +7,15 @@ import { promisify } from "node:util";
 import { loadStats, saveStats, ensureModelStats, ensureDailyStats, addRateLimitEntry, addErrorEntry, resetSession, createEmptyStats, loadServerQuotaCache, saveServerQuotaCache, } from "./storage.js";
 import { AccountsWatcher } from "./watcher.js";
 import { FIVE_HOURS_MS } from "./types.js";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 const execAsync = promisify(exec);
-// Path to the quota command (absolute path since it may not be in PATH)
-const QUOTA_COMMAND = join(homedir(), ".antigravity-standalone", "quota");
+// Get the directory where this module is located
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// Path to the quota command (in scripts/ directory relative to dist/)
+// Structure: plugin/dist/collector.js -> plugin/scripts/quota
+const QUOTA_COMMAND = join(__dirname, "..", "scripts", "quota");
 /**
  * Determines the model group for quota tracking
  * Solo trackea modelos de Antigravity (provider google)
@@ -74,7 +78,14 @@ export class StatsCollector {
         this.serverQuotaCache = await loadServerQuotaCache();
         // Fetch fresh quota data from server immediately
         // This ensures we have current data when the first message arrives
-        await this.fetchServerQuota();
+        // Wrapped in try/catch to prevent initialization failures
+        try {
+            await this.fetchServerQuota();
+        }
+        catch {
+            // Silently ignore - fetchServerQuota already handles errors
+            this.serverQuotaCache = null;
+        }
         // Inicializar accountStats desde quotaTracking guardado en disco
         // Esto preserva los contadores entre reinicios de OpenCode
         // NO validamos expiración aquí - eso lo hace recordMessage
@@ -448,18 +459,33 @@ export class StatsCollector {
         this.quotaFetchStarted = true;
         // Set up interval for every 60 seconds
         // First fetch was already done in initialize()
+        // Wrap in try/catch to prevent any unhandled errors
         this.quotaFetchInterval = setInterval(() => {
-            this.fetchServerQuota();
+            this.fetchServerQuota().catch(() => {
+                // Silently ignore all errors
+            });
         }, 60000);
     }
     /**
      * Fetches quota from the server using the quota command
      * Updates serverQuotaCache and persists to disk on success
+     * Script returns {"available": false} when tunnel is not available
+     * ALL errors are silently ignored to prevent UI notifications
      */
     async fetchServerQuota() {
         try {
             const result = await execAsync(`${QUOTA_COMMAND} --json`, { timeout: 15000 });
+            // If no output, treat as no data available
+            if (!result.stdout || !result.stdout.trim()) {
+                this.serverQuotaCache = null;
+                return;
+            }
             const data = JSON.parse(result.stdout);
+            // Check if script returned "no data available" response
+            if (data.available === false) {
+                this.serverQuotaCache = null;
+                return;
+            }
             this.serverQuotaCache = {
                 timestamp: Date.now(),
                 email: data.email || "",
@@ -508,12 +534,11 @@ export class StatsCollector {
             // Persist to disk on successful fetch
             await saveServerQuotaCache(this.serverQuotaCache);
         }
-        catch (error) {
-            console.error("[antigravity-stats] Error fetching quota:", error);
-            // Keep existing cache if available, mark as from cache
-            if (this.serverQuotaCache) {
-                this.serverQuotaCache.isFromCache = true;
-            }
+        catch {
+            // Silently ignore ALL errors - don't let anything bubble up
+            // This includes: exit code 2, JSON parse errors, timeouts, etc.
+            // Just clear the cache so the plugin knows there's no live data
+            this.serverQuotaCache = null;
         }
     }
     /**
@@ -589,16 +614,13 @@ export class StatsCollector {
             const isActive = group === activeGroup;
             // Get server data (% and time)
             const serverData = this.getServerQuotaForGroup(group);
-            // Get local data (rpm, requests, tokens)
+            // Get local data (rpm, requests, tokens) - only for active group
             let rpm = 0;
             let requestsCount = 0;
             let tokensUsed = 0;
-            if (activeAccount) {
-                // RPM solo para el grupo activo
-                if (isActive) {
-                    rpm = acctStats?.requestTimestamps.length || 0;
-                }
-                // Requests y tokens para todos los grupos
+            if (isActive && activeAccount) {
+                rpm = acctStats?.requestTimestamps.length || 0;
+                // Get from quota tracking for this account and group
                 const tracking = this.stats.quotaTracking?.[activeAccount];
                 const window = tracking?.windows?.[group];
                 if (window) {

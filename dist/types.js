@@ -1,5 +1,5 @@
 /**
- * Types for OpenCode Antigravity Stats Plugin
+ * Tipos para OpenCode Antigravity Stats Plugin
  */
 // ============================================
 // Constants

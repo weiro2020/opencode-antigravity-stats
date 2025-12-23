@@ -1,6 +1,6 @@
 /**
  * OpenCode Antigravity Stats Plugin
- * Entry point
+ * Punto de entrada del plugin
  */
 import type { Plugin } from "@opencode-ai/plugin";
 export declare const plugin: Plugin;

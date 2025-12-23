@@ -39,8 +39,8 @@ export class AccountsWatcher {
       this.handleChange();
     });
 
-    this.watcher.on("error", (error) => {
-      console.error("[antigravity-stats] Watcher error:", error);
+    this.watcher.on("error", () => {
+      // Silently ignore watcher errors
     });
   }
 

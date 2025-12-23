@@ -1,0 +1,9 @@
+# Dependencies
+node_modules/
+
+# Config files with sensitive data
+scripts/tunnel_config.json
+scripts/quota_cache.json
+
+# OS files
+.DS_Store

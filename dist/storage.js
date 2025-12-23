@@ -63,8 +63,7 @@ export async function loadStats() {
         }
         return data;
     }
-    catch (error) {
-        console.error("[antigravity-stats] Error loading stats:", error);
+    catch {
         return createEmptyStats();
     }
 }
@@ -84,8 +83,8 @@ export async function saveStats(stats) {
         cleanupOldData(stats);
         await writeFile(STATS_FILE, JSON.stringify(stats, null, 2), "utf-8");
     }
-    catch (error) {
-        console.error("[antigravity-stats] Error saving stats:", error);
+    catch {
+        // Silently ignore save errors
     }
 }
 /**
@@ -99,8 +98,7 @@ export async function loadAccounts() {
         const content = await readFile(ACCOUNTS_FILE, "utf-8");
         return JSON.parse(content);
     }
-    catch (error) {
-        console.error("[antigravity-stats] Error loading accounts:", error);
+    catch {
         return null;
     }
 }
@@ -298,8 +296,7 @@ export async function loadServerQuotaCache() {
         }
         return data;
     }
-    catch (error) {
-        console.error("[antigravity-stats] Error loading quota cache:", error);
+    catch {
         return null;
     }
 }
@@ -332,8 +329,8 @@ export async function saveServerQuotaCache(cache) {
         }
         await writeFile(QUOTA_CACHE_FILE, JSON.stringify(cacheToSave, null, 2), "utf-8");
     }
-    catch (error) {
-        console.error("[antigravity-stats] Error saving quota cache:", error);
+    catch {
+        // Silently ignore save errors
     }
 }
 //# sourceMappingURL=storage.js.map

@@ -1,9 +1,9 @@
 /**
- * Types for OpenCode Antigravity Stats Plugin
+ * Tipos para OpenCode Antigravity Stats Plugin
  */
 
 // ============================================
-// Stats Data Structures
+// Estructuras de Datos de Stats
 // ============================================
 
 export interface ModelStats {

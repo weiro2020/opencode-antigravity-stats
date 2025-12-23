@@ -105,6 +105,8 @@ export declare class StatsCollector {
     /**
      * Fetches quota from the server using the quota command
      * Updates serverQuotaCache and persists to disk on success
+     * Script returns {"available": false} when tunnel is not available
+     * ALL errors are silently ignored to prevent UI notifications
      */
     fetchServerQuota(): Promise<void>;
     /**

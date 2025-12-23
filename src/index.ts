@@ -1,6 +1,6 @@
 /**
  * OpenCode Antigravity Stats Plugin
- * Entry point
+ * Punto de entrada del plugin
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -12,17 +12,16 @@ import type { ModelGroup } from "./types.js";
 let collector: StatsCollector | null = null;
 
 export const plugin: Plugin = async ({ client }) => {
-  // Initialize collector
+  // Inicializar collector
   collector = new StatsCollector();
 
-  // Toast callback
+  // Callback para notificaciones toast
   const showToast = async (
-    title: string,
-    message: string,
-    variant: "info" | "success" | "warning" | "error"
+    _title: string,
+    _message: string,
+    _variant: "info" | "success" | "warning" | "error"
   ) => {
-    // Toast deshabilitado - solo log en consola
-    console.log(`[antigravity-stats] ${variant} - ${title}: ${message}`);
+    // Toast deshabilitado - silently ignore
   };
 
   await collector.initialize(showToast);
@@ -39,6 +38,7 @@ export const plugin: Plugin = async ({ client }) => {
   // Grupo activo: completo (rpm/req, %, time, tokens)
   // Grupos inactivos: compacto (solo % y time)
   // ! antes del % indica que usa cache/fallback
+  // Si no hay datos de quota (tunnel no disponible), no modifica el título
   const updateSessionTitle = async (sessionID: string, providerID: string, modelID: string) => {
     if (!collector) return;
 
@@ -48,19 +48,22 @@ export const plugin: Plugin = async ({ client }) => {
       
       // Si es "other", no mostrar stats de quota (no cuenta para límites)
       if (activeGroup === "other") {
-        await client.session.update({
-          path: { id: sessionID },
-          body: { title: `[${modelID.substring(0, 10)}] No quota tracking` },
-        });
-        return;
+        return; // Don't modify title for "other" models
       }
 
-      // Get all 3 groups with combined server + local data
+      // Obtener los 3 grupos con datos combinados del servidor + local
       const allGroups = await collector.getQuotaStatsAllGroups(activeGroup);
+      
+      // Si no hay datos de ningún grupo (tunnel no disponible), no modificar el título
+      // Esto permite que OpenCode muestre su título normal
+      const hasQuotaData = allGroups.some(g => g.percentRemaining !== null);
+      if (!hasQuotaData) {
+        return; // Don't modify title when no quota data available
+      }
 
-      // Build title parts
-      // Active: CL:4/20,92%,4h20,1.8M
-      // Inactive: PR:100%,5h
+      // Construir partes del titulo
+      // Activo: CL:4/20,92%,4h20,1.8M
+      // Inactivo: PR:100%,5h
       const parts = allGroups.map((g) => {
         const pctPrefix = g.isFromCache ? "!" : "";
         const pct = g.percentRemaining !== null 
@@ -76,7 +79,7 @@ export const plugin: Plugin = async ({ client }) => {
         }
       });
 
-      // Group label for the active group
+      // Etiqueta del grupo activo
       const groupLabels: Record<ModelGroup, string> = {
         claude: "CL",
         pro: "PR",
@@ -91,22 +94,22 @@ export const plugin: Plugin = async ({ client }) => {
         body: { title },
       });
     } catch (error) {
-      console.error("[antigravity-stats] Error updating session title:", error);
+      // Silently ignore errors - don't spam console
     }
   };
 
   return {
     /**
-     * Event hook - captures messages and errors
+     * Hook de eventos - captura mensajes y errores
      */
     event: async ({ event }) => {
       if (!collector) return;
 
-      // Capture assistant messages with token usage
+      // Capturar mensajes del asistente con uso de tokens
       if (event.type === "message.updated") {
         const msg = event.properties.info;
 
-        // Only process completed assistant messages
+        // Solo procesar mensajes completados del asistente
         if (
           msg.role === "assistant" &&
           msg.tokens &&
@@ -124,7 +127,7 @@ export const plugin: Plugin = async ({ client }) => {
             cacheWrite: msg.tokens.cache?.write || 0,
           });
 
-          // Start quota fetching on first message (runs immediately + every 60s)
+          // Iniciar fetch de quota en primer mensaje (corre inmediatamente + cada 60s)
           collector.startQuotaFetching();
 
           // Actualizar título de sesión en sidebar
@@ -132,7 +135,7 @@ export const plugin: Plugin = async ({ client }) => {
         }
       }
 
-      // Capture errors
+      // Capturar errores
       if (event.type === "session.error") {
         const error = event.properties.error;
 
@@ -140,7 +143,7 @@ export const plugin: Plugin = async ({ client }) => {
           const statusCode = error.data.statusCode || 0;
           const message = error.data.message || "Unknown error";
 
-          // Try to extract model from the error message
+          // Intentar extraer modelo del mensaje de error
           let model = "unknown";
           const modelMatch = message.match(/Model:\s*([^\s\n]+)/i);
           if (modelMatch) {
@@ -158,24 +161,24 @@ export const plugin: Plugin = async ({ client }) => {
     },
 
     /**
-     * Tool definition for /stats command
+     * Definicion de herramienta para comando /stats
      */
     tool: {
       "antigravity-stats": {
         description:
-          "Show Antigravity usage statistics including tokens, rate-limits, and errors",
+          "Mostrar estadisticas de uso de Antigravity incluyendo tokens, rate-limits y errores",
         parameters: z.object({
           view: z
             .enum(["session", "daily", "errors", "all"])
             .optional()
             .default("all")
             .describe(
-              "View type: session (current), daily (last 7 days), errors (errors & rate-limits), all (everything)"
+              "Tipo de vista: session (actual), daily (ultimos 7 dias), errors (errores y rate-limits), all (todo)"
             ),
         }),
         execute: async ({ view }: { view: "session" | "daily" | "errors" | "all" }) => {
           if (!collector) {
-            return "Stats collector not initialized";
+            return "Collector de stats no inicializado";
           }
 
           const stats = collector.getStats();
@@ -187,7 +190,7 @@ export const plugin: Plugin = async ({ client }) => {
   };
 };
 
-// Cleanup on process exit
+// Limpieza al salir del proceso
 process.on("beforeExit", async () => {
   if (collector) {
     await collector.stop();

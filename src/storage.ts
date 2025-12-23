@@ -83,8 +83,7 @@ export async function loadStats(): Promise<StatsData> {
     }
     
     return data;
-  } catch (error) {
-    console.error("[antigravity-stats] Error loading stats:", error);
+  } catch {
     return createEmptyStats();
   }
 }
@@ -107,8 +106,8 @@ export async function saveStats(stats: StatsData): Promise<void> {
     cleanupOldData(stats);
 
     await writeFile(STATS_FILE, JSON.stringify(stats, null, 2), "utf-8");
-  } catch (error) {
-    console.error("[antigravity-stats] Error saving stats:", error);
+  } catch {
+    // Silently ignore save errors
   }
 }
 
@@ -122,8 +121,7 @@ export async function loadAccounts(): Promise<AntigravityAccountsData | null> {
     }
     const content = await readFile(ACCOUNTS_FILE, "utf-8");
     return JSON.parse(content) as AntigravityAccountsData;
-  } catch (error) {
-    console.error("[antigravity-stats] Error loading accounts:", error);
+  } catch {
     return null;
   }
 }
@@ -350,8 +348,7 @@ export async function loadServerQuotaCache(): Promise<ServerQuotaCache | null> {
     }
     
     return data;
-  } catch (error) {
-    console.error("[antigravity-stats] Error loading quota cache:", error);
+  } catch {
     return null;
   }
 }
@@ -387,7 +384,7 @@ export async function saveServerQuotaCache(cache: ServerQuotaCache): Promise<voi
     }
     
     await writeFile(QUOTA_CACHE_FILE, JSON.stringify(cacheToSave, null, 2), "utf-8");
-  } catch (error) {
-    console.error("[antigravity-stats] Error saving quota cache:", error);
+  } catch {
+    // Silently ignore save errors
   }
 }
