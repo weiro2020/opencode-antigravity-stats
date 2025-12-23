@@ -185,8 +185,7 @@ def fetch_quota(ls_info: LanguageServerInfo) -> Optional[QuotaSnapshot]:
         data = json.loads(result.stdout)
         return parse_quota_response(data)
         
-    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
-        print(f"Error fetching quota: {e}", file=sys.stderr)
+    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired):
         return None
 
 
@@ -245,8 +244,6 @@ def save_quota_to_cache(snapshot: QuotaSnapshot):
     
     with open(CACHE_FILE, 'w') as f:
         json.dump(data, f, indent=2)
-    
-    print(f"Quota cached to {CACHE_FILE}", file=sys.stderr)
 
 
 def load_quota_from_cache() -> Optional[QuotaSnapshot]:
@@ -278,8 +275,7 @@ def load_quota_from_cache() -> Optional[QuotaSnapshot]:
             cache_age_seconds=cache_age
         )
         
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"Error loading cache: {e}", file=sys.stderr)
+    except (json.JSONDecodeError, KeyError):
         return None
 
 
@@ -558,55 +554,27 @@ def main():
     args = parser.parse_args()
     
     snapshot = None
-    source = None
     
-    # Try live fetch first (unless --cached)
+    # Only try tunnel - no local LS search, no cache fallback, no console alerts
     if not args.cached:
-        # Try local LS first (unless --tunnel forces tunnel)
-        if not args.tunnel:
-            ls_info = find_language_server()
-            
-            if ls_info:
-                if not args.quiet:
-                    print(f"Found Language Server (PID: {ls_info.pid}, Port: {ls_info.http_port})", file=sys.stderr)
-                snapshot = fetch_quota(ls_info)
-                source = "local"
-                
-                if snapshot and args.save:
-                    save_quota_to_cache(snapshot)
-            else:
-                if not args.quiet:
-                    print("No Language Server found, trying tunnel...", file=sys.stderr)
+        tunnel_port, tunnel_csrf = load_tunnel_config()
         
-        # Fallback to tunnel if local LS not available
-        if not snapshot:
-            tunnel_port, tunnel_csrf = load_tunnel_config()
+        if tunnel_csrf and is_tunnel_available(tunnel_port):
+            snapshot = fetch_quota_via_tunnel(tunnel_port, tunnel_csrf)
             
-            if tunnel_csrf and is_tunnel_available(tunnel_port):
-                if not args.quiet:
-                    print(f"Trying tunnel on port {tunnel_port}...", file=sys.stderr)
-                snapshot = fetch_quota_via_tunnel(tunnel_port, tunnel_csrf)
-                
-                if snapshot:
-                    source = "tunnel"
-                    if not args.quiet:
-                        print("Quota fetched via tunnel", file=sys.stderr)
-                    if args.save:
-                        save_quota_to_cache(snapshot)
-            elif not args.quiet:
-                if not tunnel_csrf:
-                    print("Tunnel not configured (no CSRF token)", file=sys.stderr)
-                else:
-                    print(f"Tunnel port {tunnel_port} not available", file=sys.stderr)
+            if snapshot and args.save:
+                save_quota_to_cache(snapshot)
     
-    # Fall back to cache
-    if not snapshot:
+    # If --cached flag, load from cache
+    if args.cached:
         snapshot = load_quota_from_cache()
-        source = "cache"
-        
-        if not snapshot:
-            print("Error: No quota data available (no LS, no tunnel, no cache).", file=sys.stderr)
-            sys.exit(1)
+    
+    # If no data available, return empty JSON (exit code 0 to avoid exceptions)
+    # This signals the plugin that there's no data, without causing errors
+    if not snapshot:
+        if args.json:
+            print('{"available": false}')
+        sys.exit(0)
     
     # Output
     if args.json:
