@@ -693,12 +693,8 @@ export class StatsCollector {
           
           if (serverResetTime) {
             const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
-            // Buffer de seguridad: solo resetear si windowStart es claramente anterior al ciclo
-            // (más de 5 minutos antes). Esto evita resets por diferencias de reloj o
-            // ajustes menores del servidor cuando la ventana es muy nueva.
-            const SAFETY_BUFFER = 5 * 60 * 1000; // 5 minutos
             
-            if (window.windowStart < (serverCycleStart - SAFETY_BUFFER)) {
+            if (window.windowStart < serverCycleStart) {
               // El servidor empezó un nuevo ciclo - resetear contadores locales
               window.windowStart = serverCycleStart;
               window.requestsCount = 0;
@@ -843,49 +839,12 @@ export class StatsCollector {
       if (isActive && activeAccount) {
         rpm = acctStats?.requestTimestamps.length || 0;
         
-        // Get from quota tracking for this account and group
+        // Get from quota tracking for this account and group (READ ONLY)
+        // La lógica de reset está en fetchServerQuota, no aquí
         const tracking = this.stats.quotaTracking?.[activeAccount];
         const window = tracking?.windows?.[group];
         
         if (window) {
-          // Check if server quota was reset (100% remaining or reset_time is in the future 
-          // and our windowStart is before the previous reset cycle)
-          const serverResetTime = serverData?.resetTime ? new Date(serverData.resetTime).getTime() : null;
-          const serverPercent = serverData?.percent;
-          
-          // If server shows 100% and we have requests, the server reset - clear our counters
-          // Or if our window started before the server's current cycle began (reset_time - 5h)
-          let shouldReset = false;
-          
-          // Comentado: Esta logica causa resets prematuros cuando el uso es bajo o hay mucho cache
-          // y el servidor sigue reportando 100%. Confiamos mas en el timestamp.
-          /*
-          if (serverPercent !== null && serverPercent !== undefined && serverPercent >= 99.9 && window.requestsCount > 0) {
-            // Server shows 100%, but we have requests - server must have reset
-            shouldReset = true;
-          } else 
-          */
-          if (serverResetTime) {
-            // Calculate when the current server cycle started (reset_time - 5h)
-            const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
-            // Buffer de seguridad (5 min) para evitar resets por diferencias de reloj
-            const SAFETY_BUFFER = 5 * 60 * 1000;
-            
-            if (window.windowStart < (serverCycleStart - SAFETY_BUFFER)) {
-              // Our window started before the current server cycle - reset
-              shouldReset = true;
-            }
-          }
-          
-          if (shouldReset && serverResetTime) {
-            // Reset the local window to match server's new cycle
-            const serverCycleStart = serverResetTime - FIVE_HOURS_MS;
-            window.windowStart = serverCycleStart;
-            window.requestsCount = 0;
-            window.tokensUsed = 0;
-            this.scheduleSave();
-          }
-          
           requestsCount = window.requestsCount;
           tokensUsed = window.tokensUsed;
         }
