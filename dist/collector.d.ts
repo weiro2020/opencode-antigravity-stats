@@ -98,37 +98,6 @@ export declare class StatsCollector {
      */
     fetchServerQuota(): Promise<void>;
     /**
-     * Gets server quota data for a specific model group
-     * Maps server group names to ModelGroup values
-     * Calculates timeUntilReset dynamically from reset_time
-     */
-    getServerQuotaForGroup(group: ModelGroup): {
-        percent: number | null;
-        timeUntilReset: string;
-        resetTime: string | null;
-        isFromCache: boolean;
-    } | null;
-    /**
-     * Calculates time remaining until reset from ISO timestamp
-     */
-    private calculateTimeUntilReset;
-    /**
-     * Gets quota stats for all 3 groups, combining server data with local tracking
-     * Returns groups ordered with active group first, then CL, PR, FL
-     * @param activeGroup - The currently active model group
-     */
-    getQuotaStatsAllGroups(activeGroup: ModelGroup): Promise<Array<{
-        group: ModelGroup;
-        label: string;
-        rpm: number;
-        requestsCount: number;
-        tokensUsed: number;
-        percentRemaining: number | null;
-        timeUntilReset: string;
-        isFromCache: boolean;
-        isActive: boolean;
-    }>>;
-    /**
      * Gets current stats
      */
     getStats(): StatsData;
