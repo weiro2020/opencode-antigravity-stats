@@ -1,57 +1,96 @@
 # OpenCode Antigravity Stats Plugin - Changelog
 
-## v1.2.1 - 2025-12-21: Scripts Auxiliares
+## v1.2.4 - 2025-12-23: Cleanup and Simplification
 
-### Nuevo
+### Important Changes
 
-**Agregado directorio scripts/ con utilidades:**
-- `quota` - Wrapper bash para el script de quota
-- `get_antigravity_quota.py` - Script Python que consulta quota del Language Server via Connect RPC
-- `antigravity-server-wrapper.sh` - Previene auto-apagado del servidor despues de 3 horas
+**Removed sidebar title modification:**
+- The `updateSessionTitle()` function was completely removed
+- The plugin no longer modifies the OpenCode session title
+- Stats are now obtained exclusively via the `stats --oneline` script
 
-### Documentacion
+**Massive cleanup of dead code (-454 lines):**
+- Removed unused functions: `getQuotaStatsAllGroups`, `getServerQuotaForGroup`, `calculateTimeUntilReset`, `getQuotaStats`, `formatTimeRemaining`, `formatTokens`
+- Removed unused imports
+- Cleaner and more maintainable code
 
-- README actualizado con instrucciones de instalacion de scripts auxiliares
+**Fixed data loss bug:**
+- Fixed counter reset logic that was executing incorrectly
+- Reset now only occurs in `fetchServerQuota()` (every 60 seconds)
+
+### Technical Changes
+
+| File | Changes |
+|------|---------|
+| `src/index.ts` | Removed `updateSessionTitle()` and related functions. Reduced from 215 to 138 lines |
+| `src/collector.ts` | Removed format and stats functions. Reduced from 903 to 645 lines |
+
+### Stats Script
+
+Stats are obtained by running:
+```bash
+~/.antigravity-standalone/stats --oneline
+```
+
+Output format:
+```
+[CL] 5rpm/89req,84%,4h45m,1.5M | PR:100%,4h57m | FL:100%,4h57m
+```
 
 ---
 
-## v1.2.0 - 2025-12-21: Quota del Servidor y Arquitectura Simplificada
+## v1.2.1 - 2025-12-21: Auxiliary Scripts
 
-### Cambios Importantes
+### New
 
-**Sistema de calibracion eliminado:**
-- Los campos `calibration` y `calibrations` fueron eliminados de `AccountQuotaTracking`
-- Los metodos `calibrateQuota()` y `calibrateQuotaManual()` fueron eliminados
-- El porcentaje de quota ahora viene **exclusivamente del servidor** via `quota --json`
+**Added scripts/ directory with utilities:**
+- `quota` - Bash wrapper for quota script
+- `get_antigravity_quota.py` - Python script that queries quota from Language Server via Connect RPC
+- `antigravity-server-wrapper.sh` - Prevents auto-shutdown of server after 3 hours
 
-### Nuevas Funcionalidades
+### Documentation
 
-**Tracking de quota basado en servidor:**
-- El % de quota se obtiene del servidor cada 60 segundos
-- No mas estimacion local o calibracion necesaria
-- Informacion de quota mas precisa y confiable
+- README updated with installation instructions for auxiliary scripts
 
-**Reset automatico de contadores:**
-- Contadores locales (tokens, requests) se resetean automaticamente cuando se detecta nuevo ciclo del servidor
-- Logica de deteccion: `windowStart_local < serverCycleStart` donde `serverCycleStart = reset_time - 5h`
-- Cubre tanto resets por tiempo como por quota agotada (0%)
+---
 
-**Persistencia simplificada:**
-- La memoria es ahora la fuente de verdad para stats
-- No mas logica compleja de merge disco-vs-memoria
-- Contadores se guardan directamente a disco sin comparacion
+## v1.2.0 - 2025-12-21: Server Quota and Simplified Architecture
 
-### Cambios Tecnicos
+### Important Changes
 
-| Archivo | Cambios |
-|---------|---------|
-| `src/types.ts` | Eliminada interface `QuotaCalibration`. Simplificado `AccountQuotaTracking` para solo contener `windows` |
-| `src/storage.ts` | Simplificado `saveStats()` - no mas comparacion con disco. `loadStats()` ahora limpia campos legacy de calibration |
-| `src/collector.ts` | Eliminados `calibrateQuota()` y `calibrateQuotaManual()`. Agregada logica de reset en `fetchServerQuota()` para todos los grupos. Corregido `getQuotaStatsAllGroups()` para usar `serverCycleStart` en vez de `Date.now()` al resetear |
+**Calibration system removed:**
+- The `calibration` and `calibrations` fields were removed from `AccountQuotaTracking`
+- The `calibrateQuota()` and `calibrateQuotaManual()` methods were removed
+- Quota percentage now comes **exclusively from server** via `quota --json`
 
-### Estructura de Datos
+### New Features
 
-**Antes (v1.1):**
+**Server-based quota tracking:**
+- Quota % is obtained from server every 60 seconds
+- No more local estimation or calibration needed
+- More accurate and reliable quota information
+
+**Automatic counter reset:**
+- Local counters (tokens, requests) reset automatically when new server cycle is detected
+- Detection logic: `windowStart_local < serverCycleStart` where `serverCycleStart = reset_time - 5h`
+- Covers both time-based resets and quota exhaustion (0%)
+
+**Simplified persistence:**
+- Memory is now the source of truth for stats
+- No more complex disk-vs-memory merge logic
+- Counters are saved directly to disk without comparison
+
+### Technical Changes
+
+| File | Changes |
+|------|---------|
+| `src/types.ts` | Removed `QuotaCalibration` interface. Simplified `AccountQuotaTracking` to only contain `windows` |
+| `src/storage.ts` | Simplified `saveStats()` - no more disk comparison. `loadStats()` now cleans legacy calibration fields |
+| `src/collector.ts` | Removed `calibrateQuota()` and `calibrateQuotaManual()`. Added reset logic in `fetchServerQuota()` for all groups |
+
+### Data Structure
+
+**Before (v1.1):**
 ```json
 {
   "quotaTracking": {
@@ -68,7 +107,7 @@
 }
 ```
 
-**Despues (v1.2):**
+**After (v1.2):**
 ```json
 {
   "quotaTracking": {
@@ -83,60 +122,60 @@
 }
 ```
 
-### Migracion
+### Migration
 
-No se necesita migracion manual. Los campos legacy `calibration` y `calibrations` se limpian automaticamente al cargar.
-
----
-
-## v1.1.1 - 2025-12-19: Correccion de Calculo de Tiempo y Reset
-
-### Correcciones
-
-**Calculo dinamico de tiempo:**
-- El tiempo hasta reset ahora se calcula dinamicamente desde `reset_time` (timestamp ISO)
-- Antes: se guardaba como string pre-calculado que se volvia obsoleto
-
-**Deteccion de reset de ciclo:**
-- Agregada deteccion de reset de ciclo del servidor
-- Resetea contadores locales cuando `windowStart < (reset_time - 5h)`
+No manual migration needed. Legacy `calibration` and `calibrations` fields are automatically cleaned on load.
 
 ---
 
-## v1.1.0 - 2025-12-19: Integracion con Servidor de Quota
+## v1.1.1 - 2025-12-19: Time Calculation and Reset Fix
 
-### Nuevas Funcionalidades
+### Fixes
 
-**Integracion con servidor:**
-- El plugin ahora ejecuta `quota --json` cada 60 segundos
-- Primera ejecucion se dispara con el primer mensaje de la sesion
-- Datos persistidos en archivo de cache
+**Dynamic time calculation:**
+- Time until reset is now calculated dynamically from `reset_time` (ISO timestamp)
+- Before: was saved as pre-calculated string that became stale
 
-**3 Grupos de Modelos:**
-- `CL` - Claude (todos los modelos Claude)
+**Cycle reset detection:**
+- Added server cycle reset detection
+- Resets local counters when `windowStart < (reset_time - 5h)`
+
+---
+
+## v1.1.0 - 2025-12-19: Server Quota Integration
+
+### New Features
+
+**Server integration:**
+- Plugin now executes `quota --json` every 60 seconds
+- First execution triggered with first message of session
+- Data persisted in cache file
+
+**3 Model Groups:**
+- `CL` - Claude (all Claude models)
 - `PR` - Gemini Pro (Gemini 3 Pro High/Low)
 - `FL` - Gemini Flash (Gemini 3 Flash)
 
-**Nuevo formato de titulo de sesion:**
+**New session title format:**
 ```
 [CL] CL:4/20,92%,4h20,1.8M | PR:100%,5h | FL:95%,4h35
 ```
 
-### Fuentes de Datos
+### Data Sources
 
-| Dato | Fuente |
+| Data | Source |
 |------|--------|
-| `remaining_percent` | Servidor (quota --json) |
-| `time_until_reset` | Servidor (quota --json) |
-| `rpm` | Local (ultimos 60 segundos) |
-| `requestsCount` | Local (ventana de 5 horas) |
-| `tokensUsed` | Local (ventana de 5 horas) |
+| `remaining_percent` | Server (quota --json) |
+| `time_until_reset` | Server (quota --json) |
+| `rpm` | Local (last 60 seconds) |
+| `requestsCount` | Local (5-hour window) |
+| `tokensUsed` | Local (5-hour window) |
 
 ---
 
-## v1.0.0 - 2025-12-18: Release Inicial
+## v1.0.0 - 2025-12-18: Initial Release
 
-- Tracking basico de tokens y requests
-- Soporte multi-cuenta
-- Display en titulo de sesion
-- Deteccion de rate limits
+- Basic token and request tracking
+- Multi-account support
+- Session title display
+- Rate limit detection

@@ -1,83 +1,80 @@
-# OpenCode Antigravity Stats Plugin (v1.2.3)
+# OpenCode Antigravity Stats Plugin (v1.2.4)
 
-Plugin para OpenCode que muestra en tiempo real el uso de quota de los modelos de IA (Claude, Gemini) a través de Antigravity.
+Plugin for OpenCode that tracks real-time quota usage of AI models (Claude, Gemini) through Antigravity.
 
-## Este es el Repo Privado
+## What does this plugin do?
 
-| Repo | URL | Uso |
-|------|-----|-----|
-| **Este (Privado)** | `weiro2020/opencode-antigravity-stats-Esp` | Desarrollo personal, docs en español |
-| **Público** | `weiro2020/opencode-antigravity-stats` | Para compartir, docs en inglés |
+Tracks quota usage of AI models (Claude, Gemini) and provides stats via the `stats` script:
 
-**Flujo de trabajo:**
-1. Desarrollar y probar en este repo (privado)
-2. Sincronizar código al repo público cuando esté listo
-3. NO commitear información sensible al repo público
-
-## Qué hace este plugin?
-
-Muestra en el título de la sesión de OpenCode información como:
-```
-[CL] CL:4/20,92%,4h20,1.8M | PR:5,100%,5h | FL:12,95%,4h35
+```bash
+~/.antigravity-standalone/stats --oneline
 ```
 
-Donde:
-- `[CL]` = Modelo activo (Claude)
-- `CL:4/20,92%,4h20,1.8M` = Claude: 4 RPM / 20 requests, 92% restante, 4h20m para reset, 1.8M tokens usados
-- `PR:5,100%,5h` = Gemini Pro: 5 requests, 100% restante, 5h para reset
-- `FL:12,95%,4h35` = Gemini Flash: 12 requests, 95% restante, 4h35m para reset
+Example output:
+```
+[CL] 5rpm/89req,84%,4h45m,1.5M | PR:100%,4h57m | FL:100%,4h57m
+```
 
-**Cuando no hay datos de quota** (túnel apagado), el título permanece sin modificar.
+Where:
+- `[CL]` = Active model (Claude)
+- `5rpm` = Requests per minute (last 60 seconds)
+- `89req` = Total requests in 5-hour window
+- `84%` = Remaining quota (from server)
+- `4h45m` = Time until reset
+- `1.5M` = Tokens used
 
-## Estructura del Proyecto
+**Note:** The plugin does NOT modify the sidebar title. Stats are shown via the `stats` script.
+
+## Project Structure
 
 ```
 ~/.config/opencode/plugin/opencode-antigravity-stats/
-├── src/                    # Código fuente TypeScript
-│   ├── index.ts            # Entry point, hooks de eventos, formato del título
-│   ├── collector.ts        # Lógica principal: tracking, fetch quota, acumulación
-│   ├── storage.ts          # Persistencia en disco
-│   ├── watcher.ts          # Monitorea cambios en antigravity-accounts.json
-│   ├── types.ts            # Interfaces TypeScript y constantes
-│   └── format.ts           # Formato de salida del comando /stats
-├── dist/                   # Código compilado (activo en OpenCode)
-├── scripts/                # Scripts Python auxiliares
-│   ├── quota               # Consulta quota del servidor
+├── src/                    # TypeScript source code
+│   ├── index.ts            # Entry point, event hooks
+│   ├── collector.ts        # Main logic: tracking, quota fetch, accumulation
+│   ├── storage.ts          # Disk persistence
+│   ├── watcher.ts          # Monitors changes in antigravity-accounts.json
+│   ├── types.ts            # TypeScript interfaces and constants
+│   └── format.ts           # Output format for /stats command
+├── dist/                   # Compiled code (active in OpenCode)
+├── scripts/                # Auxiliary Python scripts
+│   ├── stats               # Python script to show stats
+│   ├── quota               # Query server quota
 │   ├── get_antigravity_quota.py
-│   ├── tunnel_config.json  # Config túnel (NO commitear)
-│   └── accounts/           # Gestión de cuentas OAuth
-│       ├── cuenta          # Seleccionar cuenta activa
-│       ├── extraer-cuentas # Extraer cuentas a archivos individuales
-│       └── limpiar-cuentas # Limpiar cuentas deslogueadas
-├── docs/                   # Documentación
-│   ├── ANTIGRAVITY.md      # Doc completa del sistema
-│   └── TUNNEL.md           # Config del túnel SSH
+│   ├── tunnel_config.json  # Tunnel config (DO NOT commit)
+│   └── accounts/           # OAuth account management
+│       ├── cuenta          # Select active account
+│       ├── extraer-cuentas # Extract accounts to individual files
+│       └── limpiar-cuentas # Clean logged-out accounts
+├── docs/                   # Documentation
+│   ├── ANTIGRAVITY.md      # Complete system documentation
+│   └── TUNNEL.md           # SSH tunnel configuration
 ├── package.json
-├── README.md               # Este archivo
+├── README.md               # This file
 └── CHANGELOG.md
 ```
 
-### Symlinks (compatibilidad)
+### Symlinks (compatibility)
 
 ```
 ~/.antigravity-standalone → scripts/
 ~/.config/opencode/cuenta → scripts/accounts/cuenta
 ```
 
-## Grupos de Modelos
+## Model Groups
 
-| Grupo | Label | Modelos |
-|-------|-------|---------|
+| Group | Label | Models |
+|-------|-------|--------|
 | **claude** | CL | claude-sonnet-4-5, claude-opus-4-5-thinking, gpt-oss-120b |
 | **pro** | PR | gemini-3-pro-high, gemini-3-pro-low |
 | **flash** | FL | gemini-3-flash |
-| **other** | - | Cualquier otro (no trackea quota) |
+| **other** | - | Any other (does not track quota) |
 
-Los modelos dentro del mismo grupo **comparten la misma cuota**.
+Models within the same group **share the same quota**.
 
-## Configuración del Túnel
+## Tunnel Configuration
 
-Para obtener quota de un LS remoto (Windows), configurar `scripts/tunnel_config.json`:
+To get quota from a remote LS (Windows), configure `scripts/tunnel_config.json`:
 
 ```json
 {
@@ -86,67 +83,53 @@ Para obtener quota de un LS remoto (Windows), configurar `scripts/tunnel_config.
 }
 ```
 
-Establecer el túnel desde Windows:
+Establish tunnel from Windows:
 ```powershell
-ssh -R 50001:127.0.0.1:<PUERTO_LS> capw@142.171.248.233 -p 39776
+ssh -R 50001:127.0.0.1:<LS_PORT> user@server -p <SSH_PORT>
 ```
 
-## Comportamiento
+## Behavior
 
-| Escenario | Título de sesión |
-|-----------|------------------|
-| Túnel activo | Muestra stats: `[CL] CL:4/20,92%...` |
-| Túnel apagado | No modifica el título (sin errores) |
-| Modelo "other" | No modifica el título |
-
-## Desarrollo
+The plugin tracks requests, tokens and RPM silently. Stats are obtained by running:
 
 ```bash
-# Editar código
+~/.antigravity-standalone/stats --oneline
+```
+
+| Scenario | Result |
+|----------|--------|
+| Tunnel active | Stats with server data |
+| Tunnel off | Stats with local data + cache |
+
+## Development
+
+```bash
+# Edit code
 cd ~/.config/opencode/plugin/opencode-antigravity-stats/src/
 
-# Compilar
+# Compile
 npm run build
 
-# Reiniciar OpenCode para aplicar cambios
+# Restart OpenCode to apply changes
 ```
 
-## Sincronizar al Repo Público
+## Key Functions
 
-```bash
-# Copiar código al repo público
-cp src/*.ts ~/public-antigravity-stats/src/
-cp scripts/* ~/public-antigravity-stats/scripts/
+| Function | File | Purpose |
+|----------|------|---------|
+| `getModelGroup()` | collector.ts | Maps model → group (claude/pro/flash/other) |
+| `recordMessage()` | collector.ts | Updates tokens/requests per message |
+| `fetchServerQuota()` | collector.ts | Executes `quota --json`, updates cache |
+| `saveStats()` | storage.ts | Persists stats to disk |
 
-# Compilar y commitear
-cd ~/public-antigravity-stats
-npm run build
-git add -A && git commit -m "Sync from private repo"
-git push
-```
+## Data Files
 
-**IMPORTANTE:** No copiar archivos con información sensible:
-- `tunnel_config.json` (contiene CSRF token real)
-- Cualquier `.json` con datos de cuentas
-
-## Funciones Clave
-
-| Función | Archivo | Propósito |
-|---------|---------|-----------|
-| `getModelGroup()` | collector.ts | Mapea modelo → grupo (claude/pro/flash/other) |
-| `recordMessage()` | collector.ts | Actualiza tokens/requests por mensaje |
-| `fetchServerQuota()` | collector.ts | Ejecuta `quota --json`, actualiza cache |
-| `getQuotaStatsAllGroups()` | collector.ts | Stats de los 3 grupos (para título) |
-| `updateSessionTitle()` | index.ts | Actualiza el título de la sesión |
-
-## Archivos de Datos
-
-| Archivo | Descripción |
-|---------|-------------|
-| `~/.config/opencode/antigravity-stats.json` | Stats y tracking local |
-| `~/.config/opencode/antigravity-accounts.json` | Cuentas OAuth (del plugin auth) |
-| `scripts/tunnel_config.json` | Configuración del túnel |
+| File | Description |
+|------|-------------|
+| `~/.config/opencode/antigravity-stats.json` | Local stats and tracking |
+| `~/.config/opencode/antigravity-accounts.json` | OAuth accounts (from auth plugin) |
+| `scripts/tunnel_config.json` | Tunnel configuration |
 
 ## Changelog
 
-Ver [CHANGELOG.md](CHANGELOG.md) para historial de versiones.
+See [CHANGELOG.md](CHANGELOG.md) for version history.
