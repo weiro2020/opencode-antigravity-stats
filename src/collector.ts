@@ -12,10 +12,7 @@ import type {
   RateLimitEntry,
   ErrorEntry,
   ModelGroup,
-  QuotaWindow,
-  AccountQuotaTracking,
   ServerQuotaCache,
-  ServerQuotaGroup,
 } from "./types.js";
 import {
   loadStats,
@@ -31,7 +28,6 @@ import {
 } from "./storage.js";
 import { AccountsWatcher } from "./watcher.js";
 import { FIVE_HOURS_MS } from "./types.js";
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,17 +65,6 @@ export function getModelGroup(providerID: string, modelID: string): ModelGroup {
   if (lower.includes("gemini") && lower.includes("pro")) return "pro";
   if (lower.includes("gemini")) return "pro"; // Default gemini → pro
   return "other";
-}
-
-/**
- * Formats time remaining until reset
- */
-function formatTimeRemaining(ms: number): string {
-  if (ms <= 0) return "0m";
-  const hours = Math.floor(ms / (60 * 60 * 1000));
-  const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
-  if (hours > 0) return `${hours}h${minutes}m`;
-  return `${minutes}m`;
 }
 
 export interface AccountSessionStats {
@@ -350,91 +335,6 @@ export class StatsCollector {
         (t) => now - t < 60000
       );
     }
-  }
-
-  /**
-   * Gets quota stats for all accounts (for display in session title)
-   * Returns data needed to show: !CR:5,92%,4h20,1.8M
-   * @param activeGroup - The model group to show stats for (claude or gemini)
-   */
-  async getQuotaStats(activeGroup: ModelGroup = "claude"): Promise<
-    Array<{
-      email: string;
-      prefix: string;
-      rpm: number;
-      isRateLimited: boolean;
-      percentRemaining: number | null;
-      timeUntilReset: string;
-      tokensUsed: number;
-      requestsCount: number;
-      modelGroup: ModelGroup;
-    }>
-  > {
-    // Si el grupo es "other", no mostramos stats de quota
-    if (activeGroup === "other") {
-      return [];
-    }
-
-    this.cleanTimestamps();
-    const accounts = await this.watcher.getAllAccounts();
-    const result: Array<{
-      email: string;
-      prefix: string;
-      rpm: number;
-      isRateLimited: boolean;
-      percentRemaining: number | null;
-      timeUntilReset: string;
-      tokensUsed: number;
-      requestsCount: number;
-      modelGroup: ModelGroup;
-    }> = [];
-
-    const now = Date.now();
-
-    for (const account of accounts) {
-      const prefix = account.email.split("@")[0].substring(0, 2).toUpperCase();
-      const acctStats = this.accountStats.get(account.email);
-      const rpm = acctStats?.requestTimestamps.length || 0;
-
-      // Get quota tracking for this account
-      const tracking = this.stats.quotaTracking?.[account.email];
-      const window = tracking?.windows[activeGroup];
-
-      let tokensUsed = 0;
-      let requestsCount = 0;
-      let timeUntilReset = "?";
-      // El % viene del servidor, no se calcula localmente
-      const percentRemaining: number | null = null;
-
-      if (window) {
-        const windowAge = now - window.windowStart;
-        if (windowAge < FIVE_HOURS_MS) {
-          tokensUsed = window.tokensUsed;
-          requestsCount = window.requestsCount;
-          const remaining = FIVE_HOURS_MS - windowAge;
-          timeUntilReset = formatTimeRemaining(remaining);
-        } else {
-          // Window expired
-          timeUntilReset = "5h0m";
-        }
-      } else {
-        timeUntilReset = "5h0m"; // No window yet
-      }
-
-      result.push({
-        email: account.email,
-        prefix,
-        rpm,
-        isRateLimited: account.isRateLimited,
-        percentRemaining,
-        timeUntilReset,
-        tokensUsed,
-        requestsCount,
-        modelGroup: activeGroup,
-      });
-    }
-
-    return result;
   }
 
   /**

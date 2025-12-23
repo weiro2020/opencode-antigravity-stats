@@ -51,22 +51,6 @@ export declare class StatsCollector {
      */
     private cleanTimestamps;
     /**
-     * Gets quota stats for all accounts (for display in session title)
-     * Returns data needed to show: !CR:5,92%,4h20,1.8M
-     * @param activeGroup - The model group to show stats for (claude or gemini)
-     */
-    getQuotaStats(activeGroup?: ModelGroup): Promise<Array<{
-        email: string;
-        prefix: string;
-        rpm: number;
-        isRateLimited: boolean;
-        percentRemaining: number | null;
-        timeUntilReset: string;
-        tokensUsed: number;
-        requestsCount: number;
-        modelGroup: ModelGroup;
-    }>>;
-    /**
      * Gets current RPM (Requests Per Minute) based on last 60 seconds
      */
     getRPM(): number;
