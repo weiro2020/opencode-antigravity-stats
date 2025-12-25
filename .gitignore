@@ -5,5 +5,17 @@ node_modules/
 scripts/tunnel_config.json
 scripts/quota_cache.json
 
+# Local data files
+antigravity-stats.json
+antigravity-accounts.json
+
 # OS files
 .DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
